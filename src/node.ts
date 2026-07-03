@@ -1,0 +1,214 @@
+import { mat4, quat, vec3, type Mat4, type Quat, type Vec3 } from "wgpu-matrix";
+
+const DEG_TO_RAD = Math.PI / 180;
+const RAD_TO_DEG = 180 / Math.PI;
+
+// Convenção de Euler: graus, aplicados na ordem Z, depois X, depois Y em
+// eixos do mundo (R = Ry * Rx * Rz) — a mesma convenção da Unity.
+// Na nomenclatura do quat.fromEuler da wgpu-matrix, essa ordem se chama "yxz".
+const EULER_ORDER = "yxz";
+
+/**
+ * Nó de cena com transformação (posição, rotação, escala) e hierarquia.
+ *
+ * ## Rotação: quaternion por dentro, Euler por fora
+ *
+ * A fonte da verdade é sempre o quaternion (`_rotation`) — é ele que entra
+ * nas matrizes e que deve ser usado para interpolação/composição. Os ângulos
+ * de Euler existem como uma *visão editável* dessa rotação, com a mesma
+ * semântica da Unity/Unreal:
+ *
+ * - Ao **setar** `eulerAngles`, os valores são guardados em `_euler`
+ *   exatamente como foram passados, sem clamp: setar `(500, -720.5, 1234)`
+ *   lê de volta `(500, -720.5, 1234)`. Isso permite animar/editar ângulos
+ *   continuamente sem saltos ao cruzar 360°.
+ * - Ao **setar** `rotation` (quaternion) diretamente, esses valores "crus"
+ *   deixam de ser válidos — um quaternion não lembra quantas voltas foram
+ *   dadas. A flag `_eulerInSync` marca o cache como obsoleto e a próxima
+ *   leitura de `eulerAngles` deriva ângulos canônicos do quaternion
+ *   (x em [-90, 90], y/z em [-180, 180]).
+ *
+ * Os getters de `rotation` e `eulerAngles` retornam **cópias**: mutar o
+ * array retornado não afeta o nó (e não passaria pelo setter, que é quem
+ * mantém quaternion e Euler consistentes). Já `position` e `scale` são
+ * arrays públicos mutáveis (estilo three.js) — não há estado derivado
+ * deles, então podem ser editados no lugar: `vec3.set(1, 2, 3, n.position)`.
+ *
+ * ## Hierarquia
+ *
+ * Um nó tem no máximo um pai (`parent`, ou `null` para nós de raiz) e
+ * n filhos. `setParent` é a única operação que altera a estrutura — remove
+ * o nó da lista do pai antigo, valida ciclos e insere no novo pai;
+ * `addChild`/`removeChild` são atalhos sobre ele. As duas pontas da relação
+ * (`_parent` de um lado, `_children` do outro) nunca ficam dessincronizadas.
+ */
+export class Node {
+  /** Posição local (relativa ao pai). Mutável no lugar. */
+  readonly position: Vec3 = vec3.create(0, 0, 0);
+
+  /** Escala local, por eixo. Mutável no lugar. */
+  readonly scale: Vec3 = vec3.create(1, 1, 1);
+
+  /** Rotação local — fonte da verdade, sempre um quaternion unitário. */
+  private readonly _rotation: Quat = quat.identity();
+
+  /**
+   * Últimos ângulos de Euler setados pelo usuário, em graus, sem clamp
+   * (pode conter 500°, -720°...). Só é confiável enquanto `_eulerInSync`
+   * for true; setar o quaternion diretamente o invalida.
+   */
+  private readonly _euler: Vec3 = vec3.create(0, 0, 0);
+  private _eulerInSync = true;
+
+  private _parent: Node | null = null;
+  private readonly _children: Node[] = [];
+
+  // --- rotação ---
+
+  /** Rotação como quaternion unitário (retorna uma cópia). */
+  get rotation(): Quat {
+    return quat.clone(this._rotation);
+  }
+
+  set rotation(q: Quat) {
+    // Normaliza na entrada para que a extração de Euler e as matrizes
+    // possam assumir quaternion unitário.
+    quat.normalize(q, this._rotation);
+    this._eulerInSync = false;
+  }
+
+  /**
+   * Rotação como ângulos de Euler em graus (retorna uma cópia).
+   *
+   * Ler depois de setar devolve exatamente os valores setados, sem
+   * normalizar para [0, 360]. Se a última alteração foi via `rotation`
+   * (quaternion), devolve ângulos canônicos derivados dele.
+   */
+  get eulerAngles(): Vec3 {
+    if (!this._eulerInSync) {
+      quatToEulerDegrees(this._rotation, this._euler);
+      this._eulerInSync = true;
+    }
+    return vec3.clone(this._euler);
+  }
+
+  set eulerAngles(degrees: Vec3) {
+    // Guarda os valores crus para leitura fiel e sincroniza o quaternion,
+    // que é o que o resto do sistema consome.
+    vec3.copy(degrees, this._euler);
+    quat.fromEuler(
+      degrees[0] * DEG_TO_RAD,
+      degrees[1] * DEG_TO_RAD,
+      degrees[2] * DEG_TO_RAD,
+      EULER_ORDER,
+      this._rotation,
+    );
+    this._eulerInSync = true;
+  }
+
+  // --- hierarquia ---
+
+  /** Pai deste nó, ou `null` se for um nó de raiz. */
+  get parent(): Node | null {
+    return this._parent;
+  }
+
+  /** Filhos diretos. Somente leitura — use `setParent`/`addChild` para alterar. */
+  get children(): readonly Node[] {
+    return this._children;
+  }
+
+  /**
+   * Torna este nó filho de `newParent`, ou o desanexa se `null`.
+   *
+   * Remove o nó da lista de filhos do pai anterior, mantendo as duas
+   * pontas da relação consistentes. Lança erro se `newParent` for o
+   * próprio nó ou um descendente dele (o que criaria um ciclo).
+   */
+  setParent(newParent: Node | null): void {
+    if (newParent === this._parent) {
+      return;
+    }
+    // Sobe a cadeia de ancestrais do novo pai; se este nó aparecer lá,
+    // a operação criaria um ciclo (inclui o caso newParent === this).
+    for (let a = newParent; a !== null; a = a._parent) {
+      if (a === this) {
+        throw new Error("Cannot parent a node to itself or one of its descendants.");
+      }
+    }
+    if (this._parent) {
+      const siblings = this._parent._children;
+      siblings.splice(siblings.indexOf(this), 1);
+    }
+    this._parent = newParent;
+    newParent?._children.push(this);
+  }
+
+  /** Atalho para `child.setParent(this)`. */
+  addChild(child: Node): void {
+    child.setParent(this);
+  }
+
+  /** Desanexa `child` se ele for filho direto deste nó; senão, não faz nada. */
+  removeChild(child: Node): void {
+    if (child._parent === this) {
+      child.setParent(null);
+    }
+  }
+
+  // --- matrizes ---
+
+  /**
+   * Matriz de transformação local: translação * rotação * escala
+   * (a escala é aplicada primeiro ao vetor, depois a rotação, depois a
+   * translação).
+   */
+  getLocalMatrix(dst?: Mat4): Mat4 {
+    const m = mat4.fromQuat(this._rotation, dst);
+    // Índices 12–14 = componente de translação (layout column-major).
+    m[12] = this.position[0];
+    m[13] = this.position[1];
+    m[14] = this.position[2];
+    // mat4.scale multiplica pela direita: resultado final é T * R * S.
+    return mat4.scale(m, this.scale, m);
+  }
+
+  /**
+   * Matriz do espaço local para o espaço do mundo, acumulando a cadeia
+   * de pais recursivamente. Sem cache: recalcula a cada chamada.
+   */
+  getWorldMatrix(dst?: Mat4): Mat4 {
+    const local = this.getLocalMatrix(dst);
+    return this._parent
+      ? mat4.multiply(this._parent.getWorldMatrix(), local, local)
+      : local;
+  }
+}
+
+/**
+ * Extrai ângulos de Euler em graus (convenção EULER_ORDER, R = Ry*Rx*Rz)
+ * de um quaternion unitário. Resultado canônico: x em [-90, 90],
+ * y e z em [-180, 180].
+ *
+ * As expressões `2 * (...)` são elementos da matriz de rotação equivalente
+ * ao quaternion, dos quais os ângulos saem por asin/atan2.
+ */
+function quatToEulerDegrees(q: Quat, dst: Vec3): Vec3 {
+  const [x, y, z, w] = q;
+  // Seno do ângulo X. |sinX| ≈ 1 é gimbal lock: olhando reto para
+  // cima/baixo, os giros de y e z acontecem em torno do mesmo eixo e
+  // deixam de ser distinguíveis.
+  const sinX = 2 * (w * x - y * z);
+  if (Math.abs(sinX) < 0.9999999) {
+    dst[0] = Math.asin(sinX) * RAD_TO_DEG;
+    dst[1] = Math.atan2(2 * (x * z + w * y), 1 - 2 * (x * x + y * y)) * RAD_TO_DEG;
+    dst[2] = Math.atan2(2 * (x * y + w * z), 1 - 2 * (x * x + z * z)) * RAD_TO_DEG;
+  } else {
+    // Gimbal lock: fixa z = 0 por convenção e atribui todo o giro
+    // restante a y (mesma escolha da Unity e do three.js).
+    dst[0] = sinX > 0 ? 90 : -90;
+    dst[1] = Math.atan2(2 * (w * y - x * z), 1 - 2 * (y * y + z * z)) * RAD_TO_DEG;
+    dst[2] = 0;
+  }
+  return dst;
+}

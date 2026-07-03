@@ -9,6 +9,7 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@gltf-transform/core": "^4.4.1",
     "wgpu-matrix": "^3.4.0"
   },
   "devDependencies": {
