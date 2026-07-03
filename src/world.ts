@@ -14,6 +14,10 @@ export abstract class World {
         this.rootNode.name = "ROOT";
         this.device = device;
     }
+    /** Raiz da árvore de cena — é daqui que os render passes percorrem o mundo. */
+    public get root(): Node {
+        return this.rootNode;
+    }
     /**
      * Cria o mundo. Cada mundo vai ter uma implementação diferente disso.
      */

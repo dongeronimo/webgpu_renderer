@@ -29,8 +29,8 @@ export interface PipelineContext {
     device: GPUDevice;
     /** Formato do color attachment em que as meshes serão desenhadas. */
     colorFormat: GPUTextureFormat;
-    //TODO: depthFormat quando existir depth buffer (e aí os pipelines
-    //ganham depthStencil no descriptor)
+    /** Formato do depth attachment do pass de meshes. */
+    depthFormat: GPUTextureFormat;
     frameBindGroupLayout: GPUBindGroupLayout;
     objectBindGroupLayout: GPUBindGroupLayout;
 }
@@ -57,19 +57,21 @@ const UNSHADED_WGSL = /* wgsl */ `
 struct Frame {
     viewProj: mat4x4f,
 };
-struct Object {
-    model: mat4x4f,
-};
 struct MaterialParams {
     color: vec4f,
 };
 @group(0) @binding(0) var<uniform> frame: Frame;
-@group(1) @binding(0) var<uniform> object: Object;
+//Todas as model matrices do frame, na ordem de draw. Cada draw recebe seu
+//slot pelo firstInstance do drawIndexed, que chega aqui como instance_index.
+@group(1) @binding(0) var<storage, read> models: array<mat4x4f>;
 @group(2) @binding(0) var<uniform> material: MaterialParams;
 
 @vertex
-fn vs(@location(0) position: vec3f) -> @builtin(position) vec4f {
-    return frame.viewProj * object.model * vec4f(position, 1.0);
+fn vs(
+    @location(0) position: vec3f,
+    @builtin(instance_index) instance: u32,
+) -> @builtin(position) vec4f {
+    return frame.viewProj * models[instance] * vec4f(position, 1.0);
 }
 
 @fragment
@@ -137,6 +139,11 @@ export class UnshadedOpaque extends Material {
             },
             //glTF define triângulos CCW como frente; o frontFace default ("ccw") bate.
             primitive: { topology: "triangle-list", cullMode: "back" },
+            depthStencil: {
+                format: ctx.depthFormat,
+                depthWriteEnabled: true,
+                depthCompare: "less", //z de clip menor = mais perto da câmera
+            },
         });
     }
 

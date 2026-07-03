@@ -1,5 +1,6 @@
 import { initWebGPU } from "./gpu";
 import { FinalRenderPass } from "./finalPass";
+import { MeshRenderPass } from "./meshPass";
 import { TestWorld } from "./test_world";
 
 const status = document.getElementById("status")!;
@@ -19,6 +20,7 @@ async function main() {
 
   const canvas = document.getElementById("gpu-canvas") as HTMLCanvasElement;
   const finalPass = new FinalRenderPass(device, canvas, canvasFormat);
+  const meshPass = new MeshRenderPass(device, canvasFormat);
 
   const testWorld = new TestWorld(device);
   await testWorld.createWorld({aspect:canvas.width/canvas.height, fovy:45, near:0.1, far:100});
@@ -29,11 +31,13 @@ async function main() {
     const deltaTime = (time - lastTime) / 1000; //segundos desde o frame anterior
     testWorld.update(deltaTime);
     lastTime = time;
+    //Resize primeiro, pra mesh pass e final pass verem o mesmo tamanho
+    finalPass.resizeIfNeeded();
     const encoder = device.createCommandEncoder();//O encoder conterá os comandos
-    //TODO: Preparar os dados pra renderização
-    //TODO: Renderizar a cena pro offscreen pass
-    //TODO: final pass receber o offscreen pass
-    finalPass.render(encoder);
+    //Cena → alvo offscreen do mesh pass (agrupa, envia buffers, desenha)
+    meshPass.render(encoder, testWorld.root, canvas.width, canvas.height);
+    //Composição do offscreen no backbuffer
+    finalPass.render(encoder, meshPass.colorView);
     queue.submit([encoder.finish()]);
     requestAnimationFrame(frame);
   }
