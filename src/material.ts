@@ -1,0 +1,186 @@
+//Material: o elo entre o Renderable e a GPU. É aqui que mora o
+//GPURenderPipeline — pipeline e material não se separam porque o pipeline
+//é exatamente "o shader + estado de render de um TIPO de material".
+//
+//A chave pra visualizar a divisão:
+//
+//  TIPO de material (a subclasse)   → GPURenderPipeline
+//    shader WGSL, blend, cull...      um por (subclasse, formato de vértice),
+//                                     em cache ESTÁTICO da subclasse:
+//                                     todas as instâncias compartilham.
+//
+//  INSTÂNCIA de material (o objeto) → uniform buffer + GPUBindGroup
+//    cor, texturas, parâmetros...     próprios de cada instância.
+//
+//Convenção de bind groups, a mesma para todo shader de mesh:
+//  grupo 0 = frame   (câmera: viewProj)        — dono: render pass
+//  grupo 1 = objeto  (model matrix)            — dono: render pass
+//  grupo 2 = material (parâmetros, texturas)   — dono: a instância de Material
+import { MeshType, StaticMesh, SkinnedMesh } from "./mesh";
+
+export const BIND_GROUP_FRAME = 0;
+export const BIND_GROUP_OBJECT = 1;
+export const BIND_GROUP_MATERIAL = 2;
+
+//Tudo que a criação de um pipeline precisa saber do mundo exterior.
+//Quem monta isto é o render pass de meshes: é ele que conhece o formato
+//do attachment onde vai desenhar e é o dono dos layouts dos grupos 0 e 1.
+export interface PipelineContext {
+    device: GPUDevice;
+    /** Formato do color attachment em que as meshes serão desenhadas. */
+    colorFormat: GPUTextureFormat;
+    //TODO: depthFormat quando existir depth buffer (e aí os pipelines
+    //ganham depthStencil no descriptor)
+    frameBindGroupLayout: GPUBindGroupLayout;
+    objectBindGroupLayout: GPUBindGroupLayout;
+}
+
+export abstract class Material {
+    /**
+     * Pipeline do TIPO deste material para o formato de vértice dado.
+     * Contrato: a implementação cacheia em membro static — instâncias
+     * diferentes do mesmo material devolvem o MESMO objeto, e o render
+     * pass pode ordenar os draws por pipeline sem medo.
+     */
+    abstract getPipeline(ctx: PipelineContext, meshType: MeshType): GPURenderPipeline;
+
+    /** Bind group (grupo 2) com os buffers/texturas DESTA instância. */
+    abstract getBindGroup(): GPUBindGroup;
+}
+
+//------------------------------------------------------------------------
+//UnshadedOpaque: cor sólida, sem luz, sem blend. O material mais simples
+//possível — serve de gabarito de como implementar os próximos.
+//------------------------------------------------------------------------
+
+const UNSHADED_WGSL = /* wgsl */ `
+struct Frame {
+    viewProj: mat4x4f,
+};
+struct Object {
+    model: mat4x4f,
+};
+struct MaterialParams {
+    color: vec4f,
+};
+@group(0) @binding(0) var<uniform> frame: Frame;
+@group(1) @binding(0) var<uniform> object: Object;
+@group(2) @binding(0) var<uniform> material: MaterialParams;
+
+@vertex
+fn vs(@location(0) position: vec3f) -> @builtin(position) vec4f {
+    return frame.viewProj * object.model * vec4f(position, 1.0);
+}
+
+@fragment
+fn fs() -> @location(0) vec4f {
+    return material.color;
+}
+`;
+
+export class UnshadedOpaque extends Material {
+    //---- nível do TIPO: static, compartilhado por todas as instâncias ----
+    //(o cache assume um device e um colorFormat únicos na aplicação)
+    private static shaderModule: GPUShaderModule | null = null;
+    private static materialLayout: GPUBindGroupLayout | null = null;
+    private static readonly pipelines = new Map<MeshType, GPURenderPipeline>();
+
+    private static getMaterialBindGroupLayout(device: GPUDevice): GPUBindGroupLayout {
+        if (!this.materialLayout) {
+            this.materialLayout = device.createBindGroupLayout({
+                label: "UnshadedOpaque material",
+                entries: [
+                    {
+                        binding: 0,
+                        visibility: GPUShaderStage.FRAGMENT,
+                        buffer: { type: "uniform" },
+                    },
+                ],
+            });
+        }
+        return this.materialLayout;
+    }
+
+    private static createPipeline(ctx: PipelineContext, meshType: MeshType): GPURenderPipeline {
+        const { device } = ctx;
+        if (!this.shaderModule) {
+            this.shaderModule = device.createShaderModule({
+                label: "UnshadedOpaque shader",
+                code: UNSHADED_WGSL,
+            });
+        }
+        //O shader só lê a posição (location 0); os demais atributos do
+        //layout ficam sem uso, o que é permitido. Skinned desenha rígido
+        //até existir o sistema de animação.
+        const vertexLayout =
+            meshType === MeshType.Skinned ? SkinnedMesh.vertexLayout : StaticMesh.vertexLayout;
+        return device.createRenderPipeline({
+            label: `UnshadedOpaque (${MeshType[meshType]})`,
+            layout: device.createPipelineLayout({
+                label: "UnshadedOpaque pipeline layout",
+                //a ordem aqui É a numeração dos grupos: 0 frame, 1 objeto, 2 material
+                bindGroupLayouts: [
+                    ctx.frameBindGroupLayout,
+                    ctx.objectBindGroupLayout,
+                    this.getMaterialBindGroupLayout(device),
+                ],
+            }),
+            vertex: {
+                module: this.shaderModule,
+                entryPoint: "vs",
+                buffers: [vertexLayout],
+            },
+            fragment: {
+                module: this.shaderModule,
+                entryPoint: "fs",
+                targets: [{ format: ctx.colorFormat }],
+            },
+            //glTF define triângulos CCW como frente; o frontFace default ("ccw") bate.
+            primitive: { topology: "triangle-list", cullMode: "back" },
+        });
+    }
+
+    //---- nível da INSTÂNCIA: os buffers desta cor específica ----
+    private readonly device: GPUDevice;
+    private readonly paramsBuffer: GPUBuffer;
+    private readonly bindGroup: GPUBindGroup;
+
+    constructor(device: GPUDevice, color: [number, number, number, number] = [1, 1, 1, 1]) {
+        super();
+        this.device = device;
+        //vec4f color — uniform buffers pedem tamanho múltiplo de 16
+        this.paramsBuffer = device.createBuffer({
+            label: "UnshadedOpaque params",
+            size: 16,
+            usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+        });
+        this.bindGroup = device.createBindGroup({
+            label: "UnshadedOpaque instance",
+            layout: UnshadedOpaque.getMaterialBindGroupLayout(device),
+            entries: [{ binding: 0, resource: { buffer: this.paramsBuffer } }],
+        });
+        this.setColor(...color);
+    }
+
+    setColor(r: number, g: number, b: number, a = 1): void {
+        this.device.queue.writeBuffer(this.paramsBuffer, 0, new Float32Array([r, g, b, a]));
+    }
+
+    override getPipeline(ctx: PipelineContext, meshType: MeshType): GPURenderPipeline {
+        let pipeline = UnshadedOpaque.pipelines.get(meshType);
+        if (!pipeline) {
+            pipeline = UnshadedOpaque.createPipeline(ctx, meshType);
+            UnshadedOpaque.pipelines.set(meshType, pipeline);
+        }
+        return pipeline;
+    }
+
+    override getBindGroup(): GPUBindGroup {
+        return this.bindGroup;
+    }
+
+    /** Libera o buffer desta instância na GPU. */
+    destroy(): void {
+        this.paramsBuffer.destroy();
+    }
+}

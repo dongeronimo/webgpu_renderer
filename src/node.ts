@@ -1,4 +1,6 @@
 import { mat4, quat, vec3, type Mat4, type Quat, type Vec3 } from "wgpu-matrix";
+import type { Renderable } from "./renderable";
+import type { Camera } from "./camera";
 
 const DEG_TO_RAD = Math.PI / 180;
 const RAD_TO_DEG = 180 / Math.PI;
@@ -43,6 +45,16 @@ const EULER_ORDER = "yxz";
  * (`_parent` de um lado, `_children` do outro) nunca ficam dessincronizadas.
  */
 export class Node {
+  public name:String = "foobar";
+
+  /** O que este nó desenha, se desenhar algo. `null` = nó puramente de transform. */
+  public renderable: Renderable | null = null;
+
+  /**
+   * Projeção de câmera, se este nó for uma câmera. A view é deste nó:
+   * inversa da sua matriz de mundo (a câmera olha pelo -Z dele).
+   */
+  public camera: Camera | null = null;
   /** Posição local (relativa ao pai). Mutável no lugar. */
   readonly position: Vec3 = vec3.create(0, 0, 0);
 
@@ -156,6 +168,32 @@ export class Node {
     }
   }
 
+  /**
+   * Rotaciona o nó para que seu eixo **-Z** aponte para `target` (coords de
+   * mundo), com o +Y alinhado a `up` tanto quanto possível. A posição não
+   * muda.
+   *
+   * -Z é a convenção de câmera do glTF/WebGPU: com ela, a view matrix sai
+   * direto da inversa da matriz de mundo. (Atenção: é o oposto da Unity,
+   * onde LookAt aponta o +Z.)
+   *
+   * A conversão mundo→local assume que a cadeia de pais não tem escala
+   * não-uniforme (escala uniforme é ok).
+   */
+  lookAt(target: Vec3, up: Vec3 = vec3.create(0, 1, 0)): void {
+    const world = this.getWorldMatrix();
+    const eye = vec3.create(world[12], world[13], world[14]);
+    // cameraAim monta a matriz de modelo de "algo em eye olhando target
+    // pelo -Z" — a rotação de mundo que queremos, já ortonormal.
+    const worldRot = quat.fromMat(mat4.cameraAim(eye, target, up));
+    if (this._parent) {
+      // rotação local = inversa da rotação de mundo do pai * rotação desejada
+      const parentRot = quat.fromMat(normalizeBasis(this._parent.getWorldMatrix()));
+      quat.mul(quat.inverse(parentRot, parentRot), worldRot, worldRot);
+    }
+    this.rotation = worldRot; //o setter normaliza e invalida o cache de Euler
+  }
+
   // --- matrizes ---
 
   /**
@@ -183,6 +221,24 @@ export class Node {
       ? mat4.multiply(this._parent.getWorldMatrix(), local, local)
       : local;
   }
+}
+
+/**
+ * Normaliza no lugar os três eixos da base de uma mat4, removendo a escala
+ * para que quat.fromMat leia só a rotação. (Layout column-major: colunas
+ * 0-2 são os eixos X/Y/Z.)
+ */
+function normalizeBasis(m: Mat4): Mat4 {
+  for (let c = 0; c < 3; c++) {
+    const i = c * 4;
+    const len = Math.hypot(m[i], m[i + 1], m[i + 2]);
+    if (len > 0) {
+      m[i] /= len;
+      m[i + 1] /= len;
+      m[i + 2] /= len;
+    }
+  }
+  return m;
 }
 
 /**
