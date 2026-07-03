@@ -25,6 +25,7 @@ import { quat, vec3 } from "wgpu-matrix";
 import { Node } from "./node";
 import { Renderable } from "./renderable";
 import { Mesh, StaticMesh, SkinnedMesh } from "./mesh";
+import { createBehaviour } from "./behaviour";
 
 export interface GltfLoadResult {
   /** Nós de topo da cena do arquivo (sem pai). */
@@ -80,6 +81,31 @@ export async function loadGltf(device: GPUDevice, url: string): Promise<GltfLoad
     vec3.set(t[0], t[1], t[2], node.position);
     vec3.set(s[0], s[1], s[2], node.scale);
     node.rotation = quat.fromValues(r[0], r[1], r[2], r[3]);
+
+    //Custom properties do Blender (exporte com Include > Data > Custom
+    //Properties marcado). A propriedade "behaviours" — em qualquer caixa —
+    //é uma lista de nomes separada por ';' e vira instâncias anexadas
+    //ao nó, via registry (createBehaviour lança se o nome não foi
+    //registrado no main: erro de conteúdo aparece cedo e com nome).
+    node.extras = src.getExtras();
+    for (const [key, value] of Object.entries(node.extras)) {
+      if (key.toLowerCase() !== "behaviours") {
+        continue;
+      }
+      if (typeof value !== "string") {
+        console.warn(`glTF: "${node.name}" tem "${key}" não-string — ignorada`);
+        continue;
+      }
+      for (const rawName of value.split(";")) {
+        const behaviourName = rawName.trim();
+        if (!behaviourName) {
+          continue; //tolera ";" sobrando, tipo "a;b;"
+        }
+        const behaviour = createBehaviour(behaviourName);
+        behaviour.node = node;
+        node.behaviours.push(behaviour);
+      }
+    }
 
     const gltfMesh = src.getMesh();
     if (gltfMesh) {

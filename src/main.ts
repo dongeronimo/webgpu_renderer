@@ -2,8 +2,16 @@ import { initWebGPU } from "./gpu";
 import { FinalRenderPass } from "./finalPass";
 import { MeshRenderPass } from "./meshPass";
 import { TestWorld } from "./test_world";
+import { registerBehaviour } from "./behaviour";
+import { RotationBehaviour } from "./rotation_behaviour";
 
 const status = document.getElementById("status")!;
+// Todas as behaviours que o sistema for usar tem que ser registradas aqui devido
+// a falta de reflection de verdade depois da minificaçaõ, que caga os nomes das
+// coisas.
+function registerBehaviours() {
+  registerBehaviour("rotationBehaviour", RotationBehaviour);
+}
 
 async function main() {
   const { adapter, device } = await initWebGPU();
@@ -12,6 +20,8 @@ async function main() {
   console.log("GPU device ready:", device);
   console.log("Adapter info:", info);
   console.log("Limits:", device.limits);
+  //Registra as behaviours, tem que fazer essa gambi pq n tem reflection de verdade depois da minificaçao
+  registerBehaviours();
 
   //A queue roda os comandos
   const queue = device.queue;

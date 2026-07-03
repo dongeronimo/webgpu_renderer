@@ -1,6 +1,7 @@
 import { mat4, quat, vec3, type Mat4, type Quat, type Vec3 } from "wgpu-matrix";
 import type { Renderable } from "./renderable";
 import type { Camera } from "./camera";
+import type { Behaviour } from "./behaviour";
 
 const DEG_TO_RAD = Math.PI / 180;
 const RAD_TO_DEG = 180 / Math.PI;
@@ -55,6 +56,15 @@ export class Node {
    * inversa da sua matriz de mundo (a câmera olha pelo -Z dele).
    */
   public camera: Camera | null = null;
+
+  /** Custom properties do Blender (extras do glTF), como vieram do arquivo. */
+  public extras: Record<string, unknown> = {};
+
+  /**
+   * Behaviours anexadas a este nó. O loader instancia a partir da custom
+   * property "behaviours" (lista separada por ';'); o World.update as invoca.
+   */
+  public readonly behaviours: Behaviour[] = [];
   /** Posição local (relativa ao pai). Mutável no lugar. */
   readonly position: Vec3 = vec3.create(0, 0, 0);
 

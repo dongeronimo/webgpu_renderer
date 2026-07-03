@@ -24,11 +24,18 @@ export abstract class World {
     abstract createWorld(perspective:{
         aspect:number, fovy:number, near:number, far:number
     }):Promise<void>;
-    /** 
-     * Percorre a árvore do mundo, invocando os Behaviour de cada Node
-     * TODO: Implementar, nem existe Behaviour
+    /**
+     * Percorre a árvore do mundo, invocando os Behaviour de cada Node.
     */
-    public update(_:number) {
-        //TODO: Não implementado
+    public update(deltaTime:number) {
+        const visit = (node:Node) => {
+            for (const behaviour of node.behaviours) {
+                behaviour.update(deltaTime);
+            }
+            for (const child of node.children) {
+                visit(child);
+            }
+        };
+        visit(this.rootNode);
     }
 };
