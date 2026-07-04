@@ -1,4 +1,5 @@
 import { initWebGPU } from "./gpu";
+import { mountUi } from "./ui/mountUi";
 import { registerBehaviour } from "./behaviour";
 import { RotationBehaviour } from "./rotation_behaviour";
 import { SolRotationBehaviour } from "./solarSystem/sunRotationBehaviour";
@@ -43,6 +44,10 @@ async function main() {
   const solarSystem = new SolarSystem(device);
   solarSystem.createRenderPasses(canvas, canvasFormat);
   await solarSystem.createWorld({aspect:canvas.width/canvas.height, fovy:45, near:0.1, far:100});
+
+  //UI React no overlay por cima do canvas; recebe o mundo pra poder ler
+  //o scene graph (usePolled). O outro canal, UI→engine, é o store redux.
+  mountUi(document.getElementById("ui-root")!, solarSystem);
 
   //Loop de animação: o browser chama frame() a cada vsync (~60x/s),
   //passando um timestamp em ms. Cada chamada agenda a próxima.

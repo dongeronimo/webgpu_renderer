@@ -30,6 +30,28 @@ export abstract class World {
         return this.rootNode;
     }
     /**
+     * Primeiro nó com esse nome, ou null. É o caminho de LEITURA da UI:
+     * o scene graph é a fonte do estado por-frame, e a UI o consulta por
+     * nome a cada poll — de propósito, em vez de cachear a referência do
+     * Node, que viraria dangling depois do destroy() numa troca de mundo.
+     * Busca O(n); se um dia doer, o World mantém um Map name→Node.
+     */
+    public findNode(name: string): Node | null {
+        const visit = (node: Node): Node | null => {
+            if (node.name === name) {
+                return node;
+            }
+            for (const child of node.children) {
+                const found = visit(child);
+                if (found) {
+                    return found;
+                }
+            }
+            return null;
+        };
+        return visit(this.rootNode);
+    }
+    /**
      * Cria a infra de renderização DESTE mundo: os render passes e a
      * fiação entre eles. Par do createWorld — uma cria como se desenha,
      * a outra cria o que se desenha. Chamada antes do createWorld.

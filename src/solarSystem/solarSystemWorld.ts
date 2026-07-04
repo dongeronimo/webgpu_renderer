@@ -1,6 +1,7 @@
 
 import { Camera } from "../camera";
 import { FinalRenderPass } from "../finalPass";
+import { HelloReactBehaviour } from "./helloReactBehaviour";
 import { loadGltf } from "../gltfLoader";
 import { registerMaterial, UnshadedOpaque, UnshadedTextured } from "../material";
 import { Mesh } from "../mesh";
@@ -85,6 +86,17 @@ export class SolarSystem extends World {
         this.skyboxPass.setCubemap(
             await loadCubemapTexture(this.device, "/textures/cubemap_galaxy.png"),
         );
+        //demonstração do fluxo UI→engine: behaviour pendurada em código
+        //(o outro jeito seria a custom property do Blender + registry)
+        const terra = nodes.find(n=>n.name == "Terra");
+        if (terra) {
+            const hello = new HelloReactBehaviour();
+            hello.node = terra;
+            terra.behaviours.push(hello);
+        } else {
+            console.warn("SolarSystem: nó 'Terra' não encontrado — HelloReactBehaviour não anexada.");
+        }
+
         //procura o nó da camera, pega o primeiro que achar
         const cams = nodes.filter(n=>n.name == "Camera");
         cams[0].camera = new Camera();
