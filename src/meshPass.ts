@@ -2,7 +2,9 @@
 //(cor + depth). Quem põe esse resultado na tela é o FinalRenderPass.
 //
 //Donos, seguindo a divisão combinada:
-//  grupo 0 (frame)  — uniform com a viewProj da câmera. Dono: este pass.
+//  grupo 0 (frame)  — uniform com view e proj da câmera, separadas
+//                     (sombra/iluminação vão precisar delas individualmente).
+//                     Dono: este pass.
 //  grupo 1 (objeto) — UM storage buffer com todas as model matrices do
 //                     frame, uma por slot na ordem de draw; cada draw acha
 //                     a sua passando o slot em firstInstance, que chega no
@@ -18,6 +20,7 @@
 import { mat4, type Mat4 } from "wgpu-matrix";
 import { Node } from "./node";
 import type { Renderable } from "./renderable";
+import { RenderPassBit } from "./renderable";
 import {
     Material,
     UnshadedOpaque,
@@ -41,9 +44,10 @@ export class MeshRenderPass {
     private readonly device: GPUDevice;
     private readonly ctx: PipelineContext;
 
-    //grupo 0: viewProj (64 bytes)
+    //grupo 0: view (64 bytes) + proj (64 bytes), no layout do struct Frame
     private readonly frameBuffer: GPUBuffer;
     private readonly frameBindGroup: GPUBindGroup;
+    private readonly frameData = new Float32Array(2 * FLOATS_PER_MAT4);
 
     //grupo 1: o bufferzão de model matrices. Cresce quando o mundo cresce
     //(recriar buffer + bind group é barato se for raro); o conteúdo é
@@ -63,8 +67,13 @@ export class MeshRenderPass {
     //melhor um "esqueci o material" gritando que um objeto invisível.
     private readonly fallbackMaterial: UnshadedOpaque;
 
-    constructor(device: GPUDevice, colorFormat: GPUTextureFormat) {
+    //"load" quando outro pass (ex.: skybox) já pintou o alvo antes deste;
+    //"clear" (default) quando este pass é o primeiro a tocar o alvo.
+    private readonly colorLoadOp: GPULoadOp;
+
+    constructor(device: GPUDevice, colorFormat: GPUTextureFormat, colorLoadOp: GPULoadOp = "clear") {
         this.device = device;
+        this.colorLoadOp = colorLoadOp;
 
         const frameBindGroupLayout = device.createBindGroupLayout({
             label: "mesh pass frame (grupo 0)",
@@ -91,8 +100,8 @@ export class MeshRenderPass {
         };
 
         this.frameBuffer = device.createBuffer({
-            label: "mesh pass viewProj",
-            size: 64,
+            label: "mesh pass frame (view + proj)",
+            size: this.frameData.byteLength,
             usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
         });
         this.frameBindGroup = device.createBindGroup({
@@ -126,7 +135,9 @@ export class MeshRenderPass {
             if (node.camera && !cameraNode) {
                 cameraNode = node; //primeira câmera achada é A câmera
             }
-            if (node.renderable) {
+            //só desenha quem aceita o main pass — o cubo do skybox, por
+            //exemplo, vive na árvore mas não tem esse bit
+            if (node.renderable && node.renderable.passMask & RenderPassBit.Main) {
                 const material = node.renderable.material ?? this.fallbackMaterial;
                 items.push({
                     renderable: node.renderable,
@@ -160,8 +171,9 @@ export class MeshRenderPass {
             const cam = cameraNode as Node;
             cam.camera!.aspect = width / height; //segue o canvas automaticamente
             const view = mat4.invert(cam.worldMatrix); //invert não muta a fonte
-            const viewProj = mat4.multiply(cam.camera!.getProjectionMatrix(), view);
-            this.device.queue.writeBuffer(this.frameBuffer, 0, viewProj as Float32Array<ArrayBuffer>);
+            this.frameData.set(view, 0);
+            this.frameData.set(cam.camera!.getProjectionMatrix(), FLOATS_PER_MAT4);
+            this.device.queue.writeBuffer(this.frameBuffer, 0, this.frameData);
         } else if (items.length > 0) {
             console.warn("MeshRenderPass: nenhum nó com camera no mundo — nada será desenhado.");
             items.length = 0;
@@ -189,7 +201,7 @@ export class MeshRenderPass {
             colorAttachments: [
                 {
                     view: this._colorView!,
-                    loadOp: "clear",
+                    loadOp: this.colorLoadOp,
                     clearValue: { r: 0.39, g: 0.58, b: 0.93, a: 1 }, //cornflower blue
                     storeOp: "store",
                 },
@@ -244,7 +256,25 @@ export class MeshRenderPass {
         });
     }
 
-    private ensureTargets(width: number, height: number): void {
+    /** Libera os recursos de GPU do pass (buffers, alvos, material fallback). */
+    destroy(): void {
+        this.frameBuffer.destroy();
+        this.objectBuffer.destroy();
+        this.colorTexture?.destroy();
+        this.depthTexture?.destroy();
+        this.colorTexture = null;
+        this.depthTexture = null;
+        this._colorView = null;
+        this.depthView = null;
+        this.fallbackMaterial.destroy();
+    }
+
+    /**
+     * Garante os alvos no tamanho pedido (recria só quando muda). Pública
+     * porque um pass que roda ANTES deste no mesmo alvo (ex.: skybox)
+     * precisa do colorView já existindo — o mundo chama isto primeiro.
+     */
+    ensureTargets(width: number, height: number): void {
         if (this.colorTexture && this.colorTexture.width === width && this.colorTexture.height === height) {
             return;
         }

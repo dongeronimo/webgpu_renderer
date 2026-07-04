@@ -13,7 +13,7 @@
 //    cor, texturas, parâmetros...     próprios de cada instância.
 //
 //Convenção de bind groups, a mesma para todo shader de mesh:
-//  grupo 0 = frame   (câmera: viewProj)        — dono: render pass
+//  grupo 0 = frame   (câmera: view e proj)     — dono: render pass
 //  grupo 1 = objeto  (model matrix)            — dono: render pass
 //  grupo 2 = material (parâmetros, texturas)   — dono: a instância de Material
 import { MeshType, StaticMesh, SkinnedMesh } from "./mesh";
@@ -49,6 +49,19 @@ export function getMaterial(name: string): Material | undefined {
     return materialRegistry.get(name);
 }
 
+/**
+ * Destrói e desregistra todos os materiais. Chamado pelo World.destroy():
+ * como o registry é global e só existe um mundo vivo por vez, trocar de
+ * mundo exige esvaziá-lo — senão o próximo mundo herda materiais órfãos
+ * (e um registerMaterial de nome igual vazaria os buffers do antigo).
+ */
+export function destroyRegisteredMaterials(): void {
+    for (const material of materialRegistry.values()) {
+        material.destroy();
+    }
+    materialRegistry.clear();
+}
+
 export abstract class Material {
     /**
      * Pipeline do TIPO deste material para o formato de vértice dado.
@@ -60,6 +73,13 @@ export abstract class Material {
 
     /** Bind group (grupo 2) com os buffers/texturas DESTA instância. */
     abstract getBindGroup(): GPUBindGroup;
+
+    /**
+     * Libera os recursos de GPU DESTA instância (buffers, texturas).
+     * O que é do TIPO (pipelines, shader modules, layouts em cache static)
+     * fica — não tem destroy explícito em WebGPU e vale pra vida da app.
+     */
+    destroy(): void {}
 }
 
 //------------------------------------------------------------------------
@@ -67,9 +87,13 @@ export abstract class Material {
 //possível — serve de gabarito de como implementar os próximos.
 //------------------------------------------------------------------------
 
+//view e proj separadas no Frame: sombra e iluminação vão precisar delas
+//individualmente (posição da câmera, espaço de view), então nenhum shader
+//recebe a viewProj pré-combinada — compõe proj * view * model ele mesmo.
 const UNSHADED_WGSL = /* wgsl */ `
 struct Frame {
-    viewProj: mat4x4f,
+    view: mat4x4f,
+    proj: mat4x4f,
 };
 struct MaterialParams {
     color: vec4f,
@@ -85,7 +109,7 @@ fn vs(
     @location(0) position: vec3f,
     @builtin(instance_index) instance: u32,
 ) -> @builtin(position) vec4f {
-    return frame.viewProj * models[instance] * vec4f(position, 1.0);
+    return frame.proj * frame.view * models[instance] * vec4f(position, 1.0);
 }
 
 @fragment
@@ -201,7 +225,7 @@ export class UnshadedOpaque extends Material {
     }
 
     /** Libera o buffer desta instância na GPU. */
-    destroy(): void {
+    override destroy(): void {
         this.paramsBuffer.destroy();
     }
 }
@@ -213,7 +237,8 @@ export class UnshadedOpaque extends Material {
 
 const TEXTURED_WGSL = /* wgsl */ `
 struct Frame {
-    viewProj: mat4x4f,
+    view: mat4x4f,
+    proj: mat4x4f,
 };
 @group(0) @binding(0) var<uniform> frame: Frame;
 @group(1) @binding(0) var<storage, read> models: array<mat4x4f>;
@@ -233,7 +258,7 @@ fn vs(
     @builtin(instance_index) instance: u32,
 ) -> VsOut {
     var out: VsOut;
-    out.position = frame.viewProj * models[instance] * vec4f(position, 1.0);
+    out.position = frame.proj * frame.view * models[instance] * vec4f(position, 1.0);
     out.uv = uv;
     return out;
 }
@@ -349,7 +374,7 @@ export class UnshadedTextured extends Material {
     }
 
     /** Libera a textura desta instância na GPU. */
-    destroy(): void {
+    override destroy(): void {
         this.texture.destroy();
     }
 }

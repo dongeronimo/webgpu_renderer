@@ -116,4 +116,15 @@ export class FinalRenderPass {
     pass.draw(3);
     pass.end();
   }
+
+  /**
+   * Solta o canvas: unconfigure() devolve as texturas da swapchain e
+   * libera o canvas pra ser configurado de novo — é o que permite o
+   * FinalRenderPass do PRÓXIMO mundo assumir o mesmo canvas na troca.
+   */
+  destroy(): void {
+    this.context.unconfigure();
+    this.bindGroup = null;
+    this.lastSource = null;
+  }
 }

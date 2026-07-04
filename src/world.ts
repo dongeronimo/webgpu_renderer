@@ -1,7 +1,18 @@
 import { Node } from "./node";
+import { destroyRegisteredMaterials } from "./material";
 /**
- * O mundo tem um nó raiz chamado ROOT.
- * É uma classe abstrata - cada mundo tem que implementar seu createWorld.
+ * O mundo tem um nó raiz chamado ROOT e é dono da própria sequência de
+ * render passes — cada mundo renderiza de um jeito (este com mesh+final,
+ * outro com cubemap+shadow+gbuffer..., o volume renderer com volume pass),
+ * então a cadeia não pode morar no main.
+ *
+ * Ciclo de vida (quem chama é o main):
+ *   1. new             — só guarda device e cria a raiz;
+ *   2. createRenderPasses(canvas, format) — infra de renderização do mundo;
+ *   3. createWorld(perspective)           — conteúdo (assets, materiais, câmera);
+ *   4. por frame: update(dt) e depois render(encoder);
+ *   5. destroy()       — libera GPU e solta o canvas; com tudo autocontido
+ *      assim, trocar de "fase" é destroy() num mundo e 1–3 no próximo.
  */
 export abstract class World {
     protected rootNode:Node;
@@ -19,11 +30,31 @@ export abstract class World {
         return this.rootNode;
     }
     /**
+     * Cria a infra de renderização DESTE mundo: os render passes e a
+     * fiação entre eles. Par do createWorld — uma cria como se desenha,
+     * a outra cria o que se desenha. Chamada antes do createWorld.
+     */
+    abstract createRenderPasses(canvas:HTMLCanvasElement, canvasFormat:GPUTextureFormat):void;
+    /**
      * Cria o mundo. Cada mundo vai ter uma implementação diferente disso.
      */
     abstract createWorld(perspective:{
         aspect:number, fovy:number, near:number, far:number
     }):Promise<void>;
+    /**
+     * Grava a sequência de render passes do mundo no encoder, na ordem que
+     * ESTE mundo quer. O main só faz encoder/submit — não conhece os passes.
+     */
+    abstract render(encoder:GPUCommandEncoder):void;
+    /**
+     * Libera os recursos de GPU do mundo (meshes, materiais, passes) e
+     * solta o canvas. A base cuida dos materiais registrados (o registry é
+     * global — o próximo mundo não pode herdá-lo); cada mundo sobrescreve
+     * pra destruir seus passes e meshes, chamando super.destroy().
+     */
+    public destroy():void {
+        destroyRegisteredMaterials();
+    }
     /**
      * Percorre a árvore do mundo UMA vez, fazendo as duas coisas do frame:
      * invoca os Behaviour de cada Node e atualiza o cache de worldMatrix

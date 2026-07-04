@@ -1,14 +1,45 @@
 import { Camera } from "./camera";
+import { FinalRenderPass } from "./finalPass";
 import { loadGltf } from "./gltfLoader";
 import { UnshadedOpaque } from "./material";
 import { Mesh,  } from "./mesh";
+import { MeshRenderPass } from "./meshPass";
 import { World } from "./world";
 
 export class TestWorld extends World {
     //guarda a lista de meshes
     public meshes:Mesh[] = [];
-    
+
     private red:UnshadedOpaque|undefined=undefined;
+
+    //Criados no createRenderPasses (o main chama antes do createWorld)
+    private meshPass!: MeshRenderPass;
+    private finalPass!: FinalRenderPass;
+    private canvas!: HTMLCanvasElement;
+
+    createRenderPasses(canvas: HTMLCanvasElement, canvasFormat: GPUTextureFormat): void {
+        this.canvas = canvas;
+        this.finalPass = new FinalRenderPass(this.device, canvas, canvasFormat);
+        this.meshPass = new MeshRenderPass(this.device, canvasFormat);
+    }
+
+    render(encoder: GPUCommandEncoder): void {
+        this.finalPass.resizeIfNeeded();
+        this.meshPass.render(encoder, this.rootNode, this.canvas.width, this.canvas.height);
+        this.finalPass.render(encoder, this.meshPass.colorView);
+    }
+
+    override destroy(): void {
+        super.destroy();
+        //o red não passa pelo registry, então a base não o pega
+        this.red?.destroy();
+        for (const mesh of this.meshes) {
+            mesh.destroy();
+        }
+        this.meshes = [];
+        this.meshPass.destroy();
+        this.finalPass.destroy();
+    }
 
     async createWorld(perspective:{
         aspect:number, fovy:number, near:number, far:number

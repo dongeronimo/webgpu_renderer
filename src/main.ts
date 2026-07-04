@@ -1,6 +1,4 @@
 import { initWebGPU } from "./gpu";
-import { FinalRenderPass } from "./finalPass";
-import { MeshRenderPass } from "./meshPass";
 import { registerBehaviour } from "./behaviour";
 import { RotationBehaviour } from "./rotation_behaviour";
 import { SolRotationBehaviour } from "./solarSystem/sunRotationBehaviour";
@@ -38,13 +36,12 @@ async function main() {
   const canvasFormat = navigator.gpu.getPreferredCanvasFormat();
 
   const canvas = document.getElementById("gpu-canvas") as HTMLCanvasElement;
-  const finalPass = new FinalRenderPass(device, canvas, canvasFormat);
-  const meshPass = new MeshRenderPass(device, canvasFormat);
 
-  //const testWorld = new TestWorld(device);
-  //await testWorld.createWorld({aspect:canvas.width/canvas.height, fovy:45, near:0.1, far:100});
-  
+  //O mundo é dono da própria cadeia de render passes: primeiro a infra de
+  //renderização (createRenderPasses), depois o conteúdo (createWorld).
+  //Trocar de "fase" = destroy() neste mundo e repetir os três passos noutro.
   const solarSystem = new SolarSystem(device);
+  solarSystem.createRenderPasses(canvas, canvasFormat);
   await solarSystem.createWorld({aspect:canvas.width/canvas.height, fovy:45, near:0.1, far:100});
 
   //Loop de animação: o browser chama frame() a cada vsync (~60x/s),
@@ -54,13 +51,9 @@ async function main() {
     const deltaTime = (time - lastTime) / 1000; //segundos desde o frame anterior
     solarSystem.update(deltaTime);
     lastTime = time;
-    //Resize primeiro, pra mesh pass e final pass verem o mesmo tamanho
-    finalPass.resizeIfNeeded();
     const encoder = device.createCommandEncoder();//O encoder conterá os comandos
-    //Cena → alvo offscreen do mesh pass (agrupa, envia buffers, desenha)
-    meshPass.render(encoder, solarSystem.root, canvas.width, canvas.height);
-    //Composição do offscreen no backbuffer
-    finalPass.render(encoder, meshPass.colorView);
+    //O mundo grava sua sequência de passes; o main só faz encoder/submit
+    solarSystem.render(encoder);
     queue.submit([encoder.finish()]);
     requestAnimationFrame(frame);
   }
