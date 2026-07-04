@@ -119,13 +119,10 @@ export class MeshRenderPass {
         //---- 1. agrupamento ----
         const items: DrawItem[] = [];
         let cameraNode: Node | null = null;
-        //Desce a árvore acumulando a world matrix no caminho (evita o
-        //getWorldMatrix por nó, que re-sobe a cadeia de pais toda vez).
-        const collect = (node: Node, parentWorld: Mat4 | null) => {
-            const world = node.getLocalMatrix();
-            if (parentWorld) {
-                mat4.multiply(parentWorld, world, world);
-            }
+        //Só lê o cache de worldMatrix, que o World.update deste frame já
+        //preencheu (o main chama update antes do render) — aqui não se
+        //calcula matriz nenhuma.
+        const collect = (node: Node) => {
             if (node.camera && !cameraNode) {
                 cameraNode = node; //primeira câmera achada é A câmera
             }
@@ -135,14 +132,14 @@ export class MeshRenderPass {
                     renderable: node.renderable,
                     material,
                     pipeline: material.getPipeline(this.ctx, node.renderable.meshType),
-                    world,
+                    world: node.worldMatrix,
                 });
             }
             for (const child of node.children) {
-                collect(child, world);
+                collect(child);
             }
         };
-        collect(root, null);
+        collect(root);
 
         //Ordena por pipeline e, dentro do pipeline, por material — os ids
         //são só a ordem de primeira aparição, pra ter chave estável.
@@ -162,7 +159,7 @@ export class MeshRenderPass {
         if (cameraNode) {
             const cam = cameraNode as Node;
             cam.camera!.aspect = width / height; //segue o canvas automaticamente
-            const view = mat4.invert(cam.getWorldMatrix());
+            const view = mat4.invert(cam.worldMatrix); //invert não muta a fonte
             const viewProj = mat4.multiply(cam.camera!.getProjectionMatrix(), view);
             this.device.queue.writeBuffer(this.frameBuffer, 0, viewProj as Float32Array<ArrayBuffer>);
         } else if (items.length > 0) {

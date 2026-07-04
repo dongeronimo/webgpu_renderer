@@ -35,6 +35,20 @@ export interface PipelineContext {
     objectBindGroupLayout: GPUBindGroupLayout;
 }
 
+//Registry nome → instância de Material, no molde do registry de
+//behaviours: o createWorld registra suas instâncias ANTES do loadGltf,
+//e o loader usa a custom property "MaterialName" do Blender pra ligar
+//cada renderable ao material certo.
+const materialRegistry = new Map<string, Material>();
+
+export function registerMaterial(name: string, material: Material): void {
+    materialRegistry.set(name, material);
+}
+
+export function getMaterial(name: string): Material | undefined {
+    return materialRegistry.get(name);
+}
+
 export abstract class Material {
     /**
      * Pipeline do TIPO deste material para o formato de vértice dado.

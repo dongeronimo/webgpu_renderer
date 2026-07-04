@@ -25,13 +25,21 @@ export abstract class World {
         aspect:number, fovy:number, near:number, far:number
     }):Promise<void>;
     /**
-     * Percorre a árvore do mundo, invocando os Behaviour de cada Node.
+     * Percorre a árvore do mundo UMA vez, fazendo as duas coisas do frame:
+     * invoca os Behaviour de cada Node e atualiza o cache de worldMatrix
+     * (top-down, O(n) no total — cada nó faz uma multiplicação).
+     *
+     * A ordem dentro de cada nó importa: as behaviours dele rodam ANTES da
+     * matriz dele fechar, então mudanças que uma behaviour faz no próprio
+     * nó (ou em descendentes) já valem neste frame. Mexer num ANCESTRAL
+     * (que já fechou a matriz) só aparece no frame seguinte.
     */
     public update(deltaTime:number) {
         const visit = (node:Node) => {
             for (const behaviour of node.behaviours) {
                 behaviour.update(deltaTime);
             }
+            node.updateWorldMatrix();
             for (const child of node.children) {
                 visit(child);
             }

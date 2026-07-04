@@ -222,8 +222,37 @@ export class Node {
   }
 
   /**
-   * Matriz do espaço local para o espaço do mundo, acumulando a cadeia
-   * de pais recursivamente. Sem cache: recalcula a cada chamada.
+   * Matriz de mundo CACHEADA — o jeito barato de ler, O(1).
+   *
+   * É atualizada uma vez por frame pela travessia do World.update
+   * (top-down, O(n) no total). O contrato: ela é válida DEPOIS do update
+   * do frame corrente; quem mexer no transform depois do update e ler no
+   * mesmo frame vê o valor do frame anterior. Nó solto (fora da árvore
+   * do World) nunca é atualizado.
+   *
+   * É mutada no lugar a cada frame — não guarde a referência esperando
+   * um snapshot; copie se precisar.
+   */
+  readonly worldMatrix: Mat4 = mat4.identity();
+
+  /**
+   * Recalcula `worldMatrix` assumindo que a do pai já foi atualizada
+   * neste frame. É o passo da travessia do World — código de jogo
+   * normalmente não chama isto.
+   */
+  updateWorldMatrix(): void {
+    this.getLocalMatrix(this.worldMatrix);
+    if (this._parent) {
+      mat4.multiply(this._parent.worldMatrix, this.worldMatrix, this.worldMatrix);
+    }
+  }
+
+  /**
+   * Matriz do espaço local para o espaço do mundo, recalculada NA HORA
+   * subindo a cadeia de pais — O(profundidade) por chamada, sempre fresca.
+   * Use quando precisar do valor exato fora do ciclo do frame (ex.: logo
+   * após um setParent no createWorld); no caminho quente do frame, leia
+   * `worldMatrix`.
    */
   getWorldMatrix(dst?: Mat4): Mat4 {
     const local = this.getLocalMatrix(dst);

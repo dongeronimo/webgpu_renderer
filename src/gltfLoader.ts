@@ -26,6 +26,7 @@ import { Node } from "./node";
 import { Renderable } from "./renderable";
 import { Mesh, StaticMesh, SkinnedMesh } from "./mesh";
 import { createBehaviour } from "./behaviour";
+import { getMaterial } from "./material";
 
 export interface GltfLoadResult {
   /** Nós de topo da cena do arquivo (sem pai). */
@@ -88,8 +89,21 @@ export async function loadGltf(device: GPUDevice, url: string): Promise<GltfLoad
     //ao nó, via registry (createBehaviour lança se o nome não foi
     //registrado no main: erro de conteúdo aparece cedo e com nome).
     node.extras = src.getExtras();
+    let materialName: string | null = null;
     for (const [key, value] of Object.entries(node.extras)) {
-      if (key.toLowerCase() !== "behaviours") {
+      const k = key.toLowerCase();
+      //"MaterialName" (qualquer caixa): nome do material deste nó,
+      //resolvido via registry na hora de criar os renderables abaixo
+      if (k === "materialname") {
+        if (typeof value === "string") {
+          materialName = value;
+        } else {
+          console.warn(`glTF: "${node.name}" tem "${key}" não-string — ignorada`);
+        }
+        continue;
+      }
+      //behaviours: aceita singular e plural, em qualquer caixa
+      if (k !== "behaviours" && k !== "behaviour") {
         continue;
       }
       if (typeof value !== "string") {
@@ -107,6 +121,24 @@ export async function loadGltf(device: GPUDevice, url: string): Promise<GltfLoad
       }
     }
 
+    //Cria o renderable já com o material resolvido pelo nome (se houver).
+    //Nome não registrado só avisa: o renderable fica sem material e o
+    //mesh pass desenha no magenta de fallback — erro visível, mundo carrega.
+    const makeRenderable = (mesh: Mesh): Renderable => {
+      const renderable = new Renderable(mesh);
+      if (materialName) {
+        const material = getMaterial(materialName);
+        if (material) {
+          renderable.material = material;
+        } else {
+          console.warn(
+            `glTF: material "${materialName}" não registrado (nó "${node.name}") — vai desenhar em magenta`,
+          );
+        }
+      }
+      return renderable;
+    };
+
     const gltfMesh = src.getMesh();
     if (gltfMesh) {
       const meshName = gltfMesh.getName() || String(node.name);
@@ -116,12 +148,12 @@ export async function loadGltf(device: GPUDevice, url: string): Promise<GltfLoad
           return; //primitive não suportada, já avisada no console
         }
         if (i === 0) {
-          node.renderable = new Renderable(mesh);
+          node.renderable = makeRenderable(mesh);
         } else {
           //Renderable é um por nó: primitives extras viram filhos.
           const extra = new Node();
           extra.name = `${node.name}_prim${i}`;
-          extra.renderable = new Renderable(mesh);
+          extra.renderable = makeRenderable(mesh);
           extra.setParent(node);
           nodes.push(extra);
         }
