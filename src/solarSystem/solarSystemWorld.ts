@@ -1,17 +1,20 @@
 
 import { Camera } from "../camera";
 import { loadGltf } from "../gltfLoader";
-import { registerMaterial, UnshadedOpaque } from "../material";
+import { registerMaterial, UnshadedOpaque, UnshadedTextured } from "../material";
 import { Mesh } from "../mesh";
 import { World } from "../world";
+import { loadTexture } from "../textureLoader";
 
 export class SolarSystem extends World {
     public meshes:Mesh[] = [];
 
     async createWorld(perspective: { aspect: number; fovy: number; near: number; far: number; }): Promise<void> {
+        const terraTex = await loadTexture(this.device, "/textures/earth.jpg");
+        const moonTex = await loadTexture(this.device, "/textures/moon.jpg");
         registerMaterial("sun", new UnshadedOpaque(this.device, [1.0, 0.8,0,1]));
-        registerMaterial("terra", new UnshadedOpaque(this.device, [0.2, 0.4, 1.0, 1]));
-        registerMaterial("moon", new UnshadedOpaque(this.device, [0.4, 0.4, 0.4, 1]));
+        registerMaterial("terra", new UnshadedTextured(this.device, terraTex));
+        registerMaterial("moon", new UnshadedTextured(this.device, moonTex));
         const {roots, nodes} = await loadGltf(this.device, "/models/solar_system.glb");
         //só uma root
         roots.forEach(n=>{
