@@ -9,6 +9,7 @@ import type { RootState } from "../redux/reducers";
 import type { AppDispatch } from "../redux/store";
 import type { World } from "../world";
 import { usePolled } from "./usePolled";
+import { TextureStackVolumeRenderUIRoot } from "./TextureStackVolumeRenderUIRoot";
 
 function TerraPositionTable({ world }: { world: World }) {
     //Snapshot da translação global (colunas 12/13/14 da worldMatrix) —
@@ -68,8 +69,8 @@ export function App({ world }: { world: World }) {
                 borderRadius: 8,
             }}
         >
-            <TerraPositionTable world={world} />
-            <HelloButton />
+            <TextureStackVolumeRenderUIRoot/>
+            
         </div>
     );
 }

@@ -136,6 +136,11 @@ export interface VolumeMetadata {
  * faixa de HU [histogramMin + b*binWidth, histogramMin + (b+1)*binWidth),
  * onde binWidth = (histogramMax - histogramMin) / histogramBins.
  * (O último bin também inclui o valor histogramMax, fechado à direita.)
+ *
+ * O histograma de cada chunk cobre o chunk MAIS um apron de 1 voxel por lado
+ * (sampling trilinear na borda interpola voxels do chunk vizinho). Logo os
+ * counts se sobrepõem entre chunks vizinhos e NÃO somam o total de voxels do
+ * volume — são máscara de ocupação pra skip, não uma partição.
  */
 export interface ChunkHistograms {
   /** Contadores crus, totalChunks * histogramBins elementos. */

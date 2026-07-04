@@ -67,8 +67,9 @@ def read_dicom_files(input_dir: Path) -> List[pydicom.FileDataset]:
         if file_path.is_file():
             try:
                 ds = pydicom.dcmread(str(file_path), force=True)
-                # Verify it has pixel data
-                if hasattr(ds, 'pixel_array'):
+                # Verify it has pixel data. Checking the raw tag is free;
+                # hasattr(ds, 'pixel_array') would decode the pixels just to test.
+                if 'PixelData' in ds:
                     dicom_files.append(ds)
                     print(f"  ✓ Loaded: {file_path.name}")
                 else:
@@ -82,30 +83,90 @@ def read_dicom_files(input_dir: Path) -> List[pydicom.FileDataset]:
     return dicom_files
 
 
+def select_largest_series(dicom_files: List[pydicom.FileDataset]) -> List[pydicom.FileDataset]:
+    """
+    Keep only the largest coherent series from the input.
+
+    Real-world DICOM dirs often mix multiple series (axial + scout/localizer,
+    reconstructions...). Slices are grouped by (SeriesInstanceUID, Rows, Columns)
+    and the group with the most slices wins; everything else is discarded with
+    a warning. The shape is part of the key so a series with mixed dimensions
+    can never crash the volume assembly.
+
+    Args:
+        dicom_files: List of DICOM datasets, possibly from several series
+
+    Returns:
+        Slices belonging to the largest series only
+    """
+    groups: Dict[Any, List[pydicom.FileDataset]] = {}
+    for ds in dicom_files:
+        key = (
+            str(getattr(ds, 'SeriesInstanceUID', 'UNKNOWN')),
+            int(getattr(ds, 'Rows', 0)),
+            int(getattr(ds, 'Columns', 0)),
+        )
+        groups.setdefault(key, []).append(ds)
+
+    if len(groups) > 1:
+        print(f"\n⚠  Input contains {len(groups)} distinct series/shapes:")
+        for (uid, rows, cols), slices in sorted(groups.items(), key=lambda kv: -len(kv[1])):
+            print(f"     {len(slices):4d} slices  {cols}x{rows}  {uid[:48]}")
+
+    best_key, best_slices = max(groups.items(), key=lambda kv: len(kv[1]))
+    if len(best_slices) < len(dicom_files):
+        discarded = len(dicom_files) - len(best_slices)
+        print(f"⚠  Keeping largest series ({len(best_slices)} slices), discarding {discarded} slice(s)")
+
+    return best_slices
+
+
 def sort_dicom_slices(dicom_files: List[pydicom.FileDataset]) -> List[pydicom.FileDataset]:
     """
-    Sort DICOM slices by Instance Number or Slice Location.
-    
+    Sort DICOM slices along the scan axis.
+
+    Preferred key is geometric: ImagePositionPatient projected onto the slice
+    normal (cross product of the two ImageOrientationPatient direction cosines).
+    InstanceNumber is unreliable in the wild (reconstructions, reordered
+    series), so it is only a fallback, followed by SliceLocation.
+
     Args:
         dicom_files: List of unsorted DICOM datasets
-        
+
     Returns:
         Sorted list of DICOM datasets
     """
+    def slice_normal(ds):
+        iop = getattr(ds, 'ImageOrientationPatient', None)
+        if iop is None or len(iop) != 6:
+            return None
+        row = np.array([float(v) for v in iop[:3]])
+        col = np.array([float(v) for v in iop[3:]])
+        return np.cross(row, col)
+
+    # All slices of a series share the orientation; take it from the first
+    # slice that has one so every sort key uses the SAME normal.
+    normal = None
+    for ds in dicom_files:
+        normal = slice_normal(ds)
+        if normal is not None:
+            break
+
     def get_sort_key(ds):
-        # Try different sorting methods in order of preference
-        if hasattr(ds, 'InstanceNumber') and ds.InstanceNumber is not None:
+        ipp = getattr(ds, 'ImagePositionPatient', None)
+        if normal is not None and ipp is not None and len(ipp) == 3:
+            position = np.array([float(v) for v in ipp])
+            return float(np.dot(position, normal))
+        elif hasattr(ds, 'InstanceNumber') and ds.InstanceNumber is not None:
             return float(ds.InstanceNumber)
         elif hasattr(ds, 'SliceLocation') and ds.SliceLocation is not None:
             return float(ds.SliceLocation)
-        elif hasattr(ds, 'ImagePositionPatient') and ds.ImagePositionPatient is not None:
-            # Use Z coordinate (third value)
-            return float(ds.ImagePositionPatient[2])
         else:
             return 0
-    
+
     sorted_files = sorted(dicom_files, key=get_sort_key)
-    print(f"Sorted {len(sorted_files)} slices")
+    method = "ImagePositionPatient·normal" if normal is not None else "InstanceNumber/SliceLocation fallback"
+    print(f"Sorted {len(sorted_files)} slices ({method})")
     return sorted_files
 
 
@@ -309,6 +370,14 @@ def compute_chunk_histograms(volume: np.ndarray, chunk_size: int, num_bins: int,
     occupied bin maps to zero opacity, even if the chunk's value range spans
     opaque regions of the transfer function.
 
+    Each chunk's histogram covers the chunk PLUS a 1-voxel apron on every side
+    (clamped at volume borders). Trilinear sampling near a chunk face
+    interpolates voxels from the neighbouring chunk, so without the apron a
+    chunk whose own voxels are all transparent could still produce visible
+    samples at its border and be wrongly skipped. Consequence: bin counts
+    overlap between neighbouring chunks and no longer sum to the volume's
+    voxel count — they are an occupancy mask for skipping, not a partition.
+
     Partial chunks at the volume borders are NOT zero-padded: only real voxels
     are counted, so padding values (which would be meaningful in HU, e.g.
     0 = water) never pollute the histograms.
@@ -355,14 +424,15 @@ def compute_chunk_histograms(volume: np.ndarray, chunk_size: int, num_bins: int,
     for iz in range(num_chunks_z):
         for iy in range(num_chunks_y):
             for ix in range(num_chunks_x):
-                z_start = iz * chunk_size
-                y_start = iy * chunk_size
-                x_start = ix * chunk_size
+                # 1-voxel apron on each side, clamped at the volume borders
+                # (also handles partial border chunks: only real voxels)
+                z_start = max(iz * chunk_size - 1, 0)
+                y_start = max(iy * chunk_size - 1, 0)
+                x_start = max(ix * chunk_size - 1, 0)
 
-                # Partial border chunks: slice only real voxels
-                z_end = min(z_start + chunk_size, depth)
-                y_end = min(y_start + chunk_size, height)
-                x_end = min(x_start + chunk_size, width)
+                z_end = min((iz + 1) * chunk_size + 1, depth)
+                y_end = min((iy + 1) * chunk_size + 1, height)
+                x_end = min((ix + 1) * chunk_size + 1, width)
 
                 chunk_bins = bin_indices[z_start:z_end, y_start:y_end, x_start:x_end]
                 counts = np.bincount(chunk_bins.ravel(), minlength=num_bins)
@@ -407,7 +477,8 @@ def convert_dicom_series(input_dir: Path, output_dir: Path, apply_smoothing: boo
         print("✗ No valid DICOM files found!")
         return
     
-    sorted_files = sort_dicom_slices(dicom_files)
+    series_files = select_largest_series(dicom_files)
+    sorted_files = sort_dicom_slices(series_files)
     
     # First pass - find GLOBAL min/max and load volume
     print("\nLoading volume into memory...")
@@ -449,14 +520,20 @@ def convert_dicom_series(input_dir: Path, output_dir: Path, apply_smoothing: boo
     elif apply_smoothing and not HAS_CUPY:
         print("⚠  Smoothing requested but CuPy not available - saving unsmoothed volume")
     
-    # Compute chunk histograms (after smoothing so they reflect actual rendered values).
-    # The bin range comes from the post-smoothing volume so no voxel falls outside it.
+    # Quantize to float16 BEFORE computing histograms. The renderer samples
+    # the f16 data, and f16 rounding can move a voxel across a bin edge —
+    # binning the f32 volume would make the skip test non-conservative.
+    volume = volume.astype(np.float16).astype(np.float32)
+
+    # Compute chunk histograms (after smoothing + quantization so they reflect
+    # the values the shader will actually read). The bin range comes from the
+    # final volume so no voxel falls outside it.
     hist_min = float(np.min(volume))
     hist_max = float(np.max(volume))
     chunk_histograms = compute_chunk_histograms(volume, chunk_size, histogram_bins,
                                                 hist_min, hist_max)
-    
-    # Convert to float16 and save slices
+
+    # Convert to float16 and save slices (lossless: already quantized above)
     print(f"\nSaving {num_slices} slices as float16...")
     volume_f16 = volume.astype(np.float16)
     

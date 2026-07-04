@@ -138,7 +138,7 @@ Regra de bolso: **Redux = o que o usuário quer; scene graph = o que está acont
 
 Script CLI que converte uma série DICOM (fatias de tomografia/exame) em buffers binários float16 prontos para serem consumidos pelo renderizador de volume WebGPU. O fluxo principal:
 
-1. **Leitura e ordenação** — Varre recursivamente o diretório de entrada, carrega tudo que for DICOM válido com pixel data, e ordena as fatias por `InstanceNumber`, com fallback para `SliceLocation` e depois pela coordenada Z de `ImagePositionPatient`.
+1. **Leitura, filtro de série e ordenação** — Varre recursivamente o diretório de entrada e carrega tudo que for DICOM válido com pixel data. Como diretórios reais misturam séries (axial + scout/localizer, reconstruções...), agrupa as fatias por (`SeriesInstanceUID`, dimensões) e mantém só o grupo com mais fatias, descartando o resto com aviso. Ordena geometricamente: `ImagePositionPatient` projetado no normal da fatia (produto vetorial dos cossenos de `ImageOrientationPatient`) — `InstanceNumber` mente com frequência, então é só fallback, seguido de `SliceLocation`.
 
 2. **Montagem do volume em HU** — Carrega todas as fatias num array 3D float32, aplicando `RescaleSlope`/`RescaleIntercept` para converter os valores brutos em Hounsfield Units. Os valores ficam em HU mesmo, sem normalização, e o min/max global é registrado.
 
@@ -165,13 +165,15 @@ Isso permite recalcular a máscara de chunks "vazios" na GPU sempre que a transf
 
 ### Detalhes de implementação
 
-- **Binning**: os bins são uniformes no intervalo `[histogramMin, histogramMax]` (registrado no `metadata.json`), calculado sobre o volume **pós-suavização**, de modo que nenhum voxel cai fora do intervalo. Largura do bin = `(histogramMax - histogramMin) / histogramBins`.
+- **Binning**: os bins são uniformes no intervalo `[histogramMin, histogramMax]` (registrado no `metadata.json`), calculado sobre o volume **pós-suavização e pós-quantização para float16** — o binning roda sobre exatamente os valores que o shader vai ler (o arredondamento f32→f16 poderia mover um voxel de bin e quebrar o conservadorismo do skip), então nenhum voxel cai fora do intervalo. Largura do bin = `(histogramMax - histogramMin) / histogramBins`.
+- **Apron de 1 voxel**: o histograma de cada chunk cobre o chunk **mais 1 voxel de margem por lado** (limitado nas bordas do volume). O sampling trilinear perto da face de um chunk interpola voxels do chunk vizinho — sem o apron, um chunk com voxels próprios todos transparentes poderia produzir amostras visíveis na borda e ser pulado por engano. Consequência: as contagens se sobrepõem entre vizinhos e **não** somam o total de voxels do volume — são máscara de ocupação, não partição.
 - **Chunks de borda**: chunks parciais nas bordas do volume **não** são preenchidos com zero-padding — só voxels reais são contados. Em HU, zero é um valor significativo (água), então padding contaminaria os histogramas.
 - **Layout do `chunk_histograms.bin`**: array denso `uint32`, little-endian, com shape `(numChunksZ, numChunksY, numChunksX, histogramBins)` em ordem C (row-major). O offset do bin `b` do chunk `(x, y, z)` é:
   ```
   offset = (((z * numChunksY + y) * numChunksX + x) * histogramBins + b) * 4 bytes
   ```
 - **Campos no `metadata.json`**: `chunkSize`, `numChunksX/Y/Z`, `totalChunks`, `histogramBins`, `histogramMin`, `histogramMax`, `histogramDtype`.
+- **Ressalva teórica**: o teste por histograma é exato para sampling nearest; com trilinear, a interpolação *dentro* do chunk pode gerar valores entre dois bins ocupados mesmo com os bins intermediários vazios (ar vizinho de osso interpola passando pela faixa de tecido mole). Em CT real o partial volume effect do scanner já preenche esses intermediários, então na prática quase não morde — mas se um dia aparecer buraco no render com CTF estreita, o suspeito é esse.
 
 ## Uso
 

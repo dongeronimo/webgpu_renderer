@@ -8,6 +8,7 @@ import { SetSunColourBehaviour } from "./solarSystem/setSunColourBehaviour";
 import { TerraTranslationBehaviour } from "./solarSystem/terraTranslationBehaviour";
 import { MoonTranslationBehaviour } from "./solarSystem/moonTranslationBehaviour";
 import { TerraRotationBehaviour } from "./solarSystem/terraRotationBehaviour";
+import { TextureStackVolumeRenderer } from "./textureStackVolumeRender/textureStackVRWorld";
 const status = document.getElementById("status")!;
 // Todas as behaviours que o sistema for usar tem que ser registradas aqui devido
 // a falta de reflection de verdade depois da minificaçaõ, que caga os nomes das
@@ -41,24 +42,28 @@ async function main() {
   //O mundo é dono da própria cadeia de render passes: primeiro a infra de
   //renderização (createRenderPasses), depois o conteúdo (createWorld).
   //Trocar de "fase" = destroy() neste mundo e repetir os três passos noutro.
-  const solarSystem = new SolarSystem(device);
-  solarSystem.createRenderPasses(canvas, canvasFormat);
-  await solarSystem.createWorld({aspect:canvas.width/canvas.height, fovy:45, near:0.1, far:100});
+  // const solarSystem = new SolarSystem(device);
+  // solarSystem.createRenderPasses(canvas, canvasFormat);
+  // await solarSystem.createWorld({aspect:canvas.width/canvas.height, fovy:45, near:0.1, far:100});
 
+
+  const textureVRWorld = new TextureStackVolumeRenderer(device);
+  textureVRWorld.createRenderPasses(canvas,  canvasFormat);
+  await textureVRWorld.createWorld({aspect:canvas.width/canvas.height, fovy:45, near:0.1, far:100});
   //UI React no overlay por cima do canvas; recebe o mundo pra poder ler
   //o scene graph (usePolled). O outro canal, UI→engine, é o store redux.
-  mountUi(document.getElementById("ui-root")!, solarSystem);
+  mountUi(document.getElementById("ui-root")!, textureVRWorld);
 
   //Loop de animação: o browser chama frame() a cada vsync (~60x/s),
   //passando um timestamp em ms. Cada chamada agenda a próxima.
   let lastTime = 0;
   function frame(time: number) {
     const deltaTime = (time - lastTime) / 1000; //segundos desde o frame anterior
-    solarSystem.update(deltaTime);
+    textureVRWorld.update(deltaTime);
     lastTime = time;
     const encoder = device.createCommandEncoder();//O encoder conterá os comandos
     //O mundo grava sua sequência de passes; o main só faz encoder/submit
-    solarSystem.render(encoder);
+    textureVRWorld.render(encoder);
     queue.submit([encoder.finish()]);
     requestAnimationFrame(frame);
   }
