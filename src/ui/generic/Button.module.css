@@ -1,0 +1,81 @@
+/* Aparência única do Button — paleta pensada pro overlay escuro
+   (rgba(0,0,0,0.6)) que o App usa hoje. */
+
+.button {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    font-family: inherit; /* herda o monospace do overlay */
+    border: 1px solid transparent;
+    border-radius: 6px;
+    color: #ddd;
+    cursor: pointer;
+    user-select: none;
+    transition: background-color 80ms ease, border-color 80ms ease;
+}
+
+.button:disabled {
+    opacity: 0.45;
+    cursor: default;
+}
+
+.button:focus-visible {
+    outline: 2px solid #7ab8ff;
+    outline-offset: 1px;
+}
+
+/* variantes */
+
+.primary {
+    background: #2b6cb0;
+}
+.primary:hover:not(:disabled) {
+    background: #3182ce;
+}
+.primary:active:not(:disabled) {
+    background: #245a94;
+}
+
+.secondary {
+    background: rgba(255, 255, 255, 0.08);
+    border-color: rgba(255, 255, 255, 0.25);
+}
+.secondary:hover:not(:disabled) {
+    background: rgba(255, 255, 255, 0.16);
+}
+.secondary:active:not(:disabled) {
+    background: rgba(255, 255, 255, 0.06);
+}
+
+.ghost {
+    background: transparent;
+}
+.ghost:hover:not(:disabled) {
+    background: rgba(255, 255, 255, 0.1);
+}
+.ghost:active:not(:disabled) {
+    background: rgba(255, 255, 255, 0.04);
+}
+
+/* tamanhos */
+
+.sm {
+    padding: 2px 8px;
+    font-size: 11px;
+}
+.md {
+    padding: 4px 12px;
+    font-size: 12px;
+}
+.lg {
+    padding: 8px 16px;
+    font-size: 14px;
+}
+
+/* line-height 0 impede que SVG/emoji estiquem a altura do botão */
+.icon {
+    display: inline-flex;
+    align-items: center;
+    line-height: 0;
+}

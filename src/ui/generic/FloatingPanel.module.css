@@ -1,0 +1,40 @@
+/* Chrome único do FloatingPanel — mesma paleta escura do Button/TitleBar.
+   O painel define o próprio font pra funcionar solto, sem depender do
+   container setar 12px monospace. */
+
+.panel {
+    position: absolute;
+    display: flex;
+    flex-direction: column;
+    background: rgba(0, 0, 0, 0.6);
+    color: #ddd;
+    font: 12px/1.4 monospace;
+    border-radius: 8px;
+    box-shadow: 0 2px 10px rgba(0, 0, 0, 0.4);
+    /* religa o mouse SÓ no painel — o resto do overlay (#ui-root,
+       pointer-events:none) continua deixando o clique atravessar
+       até o canvas */
+    pointer-events: auto;
+    /* conteúdo respeita o raio dos cantos */
+    overflow: hidden;
+}
+
+/* A TitleBar como alça de arrasto. touch-action:none é obrigatório pra
+   pointer events em touch — sem ele o browser rouba o gesto pra scroll. */
+.dragHandle {
+    cursor: grab;
+    touch-action: none;
+}
+
+.dragHandle:active {
+    cursor: grabbing;
+}
+
+/* min-height:0 deixa o flex encolher a área de conteúdo e o overflow
+   rolar, em vez de estourar a height do painel */
+.content {
+    flex: 1;
+    min-height: 0;
+    overflow: auto;
+    padding: 8px 12px;
+}

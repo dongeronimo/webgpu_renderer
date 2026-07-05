@@ -1,0 +1,40 @@
+/* Aparência única da TitleBar — mesma paleta do Button, pensada pro
+   overlay escuro. O raio superior casa com o borderRadius 8 dos painéis;
+   se a barra for usada solta, o raio inferior zero não aparece. */
+
+.titleBar {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 8px;
+    background: rgba(255, 255, 255, 0.06);
+    border-bottom: 1px solid rgba(255, 255, 255, 0.15);
+    border-radius: 8px 8px 0 0;
+    color: #ddd;
+    font-family: inherit;
+    font-size: 12px;
+    user-select: none; /* título não é texto de seleção, é chrome */
+}
+
+/* flex:1 empurra as actions pra direita e dá ao título o espaço restante;
+   min-width:0 permite o ellipsis funcionar dentro do flex */
+.title {
+    flex: 1;
+    min-width: 0;
+    font-weight: 600;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.icon {
+    display: inline-flex;
+    align-items: center;
+    line-height: 0;
+}
+
+.actions {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+}

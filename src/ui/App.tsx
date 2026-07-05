@@ -10,6 +10,7 @@ import type { AppDispatch } from "../redux/store";
 import type { World } from "../world";
 import { usePolled } from "./usePolled";
 import { TextureStackVolumeRenderUIRoot } from "./TextureStackVolumeRenderUIRoot";
+import { WorldSwitch } from "./base/WorldSwitch";
 
 //export: componente do mundo solar, fora de uso enquanto o mundo ativo é o
 //VR — o export evita o erro de "não usado" e ele volta quando o mundo voltar
@@ -75,7 +76,7 @@ export function App({ world: _world }: { world: World }) {
             }}
         >
             <TextureStackVolumeRenderUIRoot/>
-            
+            <WorldSwitch/>
         </div>
     );
 }

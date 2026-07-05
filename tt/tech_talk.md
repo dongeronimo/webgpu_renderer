@@ -55,7 +55,7 @@
 - Slice stacks pay the price on the blender fixed function
 - Raymarchers pay on the fragment or compute shader.
 - Preprocessing pay on the CPU, on the memory transfer to the GPU (if the data was processed in the CPU) or in the compute shader (if the data was processed in the GPU).
--
+-pyy
 
 
 

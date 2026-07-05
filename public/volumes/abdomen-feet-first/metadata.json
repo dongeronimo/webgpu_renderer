@@ -1,0 +1,53 @@
+{
+  "numSlices": 369,
+  "width": 512,
+  "height": 512,
+  "format": "float16",
+  "bytesPerVoxel": 2,
+  "anonymized": true,
+  "patientName": "ANON_1279F9C7ECEB0AB2",
+  "patientID": "ID_40F7978161021AF2",
+  "patientBirthDate": "19650311",
+  "patientSex": "M",
+  "studyDate": "20140610",
+  "studyTime": "093214",
+  "studyDescription": "TC ABDOMEN TOTAL ABDOM",
+  "studyInstanceUID": "STUDY_944302E33DDDB811",
+  "seriesNumber": "7",
+  "seriesDescription": "LAUDO AB VENOSO",
+  "seriesInstanceUID": "SERIES_DA5550E04B0ED5D5",
+  "modality": "CT",
+  "pixelSpacing": [
+    "0.806641",
+    "0.806641"
+  ],
+  "sliceThickness": "1.250000",
+  "imageOrientationPatient": [
+    "1.000000",
+    "0.000000",
+    "0.000000",
+    "0.000000",
+    "1.000000",
+    "0.000000"
+  ],
+  "imagePositionPatient": [
+    "-209.600",
+    "-260.700",
+    "-475.000"
+  ],
+  "windowCenter": "40",
+  "windowWidth": "400",
+  "rescaleSlope": "1",
+  "rescaleIntercept": "-1024",
+  "huMin": -3024.0,
+  "huMax": 1543.0,
+  "chunkSize": 32,
+  "numChunksX": 16,
+  "numChunksY": 16,
+  "numChunksZ": 12,
+  "totalChunks": 3072,
+  "histogramBins": 32,
+  "histogramMin": -3024.0,
+  "histogramMax": 1451.0,
+  "histogramDtype": "uint32"
+}
