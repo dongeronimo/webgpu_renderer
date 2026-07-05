@@ -23,8 +23,11 @@ export const BIND_GROUP_OBJECT = 1;
 export const BIND_GROUP_MATERIAL = 2;
 
 //Tudo que a criação de um pipeline precisa saber do mundo exterior.
-//Quem monta isto é o render pass de meshes: é ele que conhece o formato
-//do attachment onde vai desenhar e é o dono dos layouts dos grupos 0 e 1.
+//Quem monta isto é o render pass que vai desenhar (mesh pass, transparent
+//slices...): é ele que conhece o formato do attachment onde vai desenhar
+//e é o dono dos layouts dos grupos 0 e 1. Os layouts que os passes criam
+//são estruturalmente idênticos, então o pipeline cacheado (static, por
+//tipo de material) vale em qualquer um deles.
 export interface PipelineContext {
     device: GPUDevice;
     /** Formato do color attachment em que as meshes serão desenhadas. */

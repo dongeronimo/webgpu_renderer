@@ -15,7 +15,9 @@ import type { Material } from "./material";
 export enum RenderPassBit {
   Main = 1 << 0,
   Skybox = 1 << 1,
-  //futuro: Shadow = 1 << 2, Reflection = 1 << 3, Volume = 1 << 4...
+  /** Fatias translúcidas compostas por blend de hardware (VR clássico). */
+  TransparentSlices = 1 << 2,
+  //futuro: Shadow = 1 << 3, Reflection = 1 << 4, Volume = 1 << 5...
 }
 
 export class Renderable {

@@ -1,5 +1,18 @@
-//Pass de meshes: desenha os renderables do mundo num alvo próprio
-//(cor + depth). Quem põe esse resultado na tela é o FinalRenderPass.
+//Pass das fatias translúcidas (VR clássico por pilha de meshes): desenha
+//os renderables com o bit TransparentSlices num alvo próprio e deixa o
+//BLEND DE HARDWARE compor fatia sobre fatia. O blend NÃO é estado do pass
+//— mora no fragment.targets[0].blend do pipeline, ou seja, no TIPO de
+//material (junto com depthWriteEnabled: false). O pass só controla
+//attachments e load/store.
+//
+//A DIFERENÇA DELIBERADA pro MeshRenderPass: aqui NÃO HÁ SORT. Com blend,
+//a ordem de draw é semântica — cada fatia compõe sobre as anteriores —
+//então o contrato é: DRAW NA ORDEM DE TRAVESSIA DA ÁRVORE (pai antes dos
+//filhos, filhos na ordem do array children). Quem garante back-to-front é
+//o dono do nó-pilha (ex.: uma behaviour que reordena children quando a
+//câmera cruza o plano da pilha). O invariante "ordem no buffer == ordem
+//de draw" do bufferzão continua valendo — só que a ordem agora vem da
+//árvore, não de um sort.
 //
 //Donos, seguindo a divisão combinada:
 //  grupo 0 (frame)  — uniform com view e proj da câmera, separadas
@@ -10,17 +23,11 @@
 //                     a sua passando o slot em firstInstance, que chega no
 //                     shader como @builtin(instance_index). Dono: este pass.
 //  grupo 2 (material) — da instância de Material.
-//
-//O frame tem três etapas, e é o pass fazer as três que garante o
-//invariante "ordem no buffer == ordem de draw":
-//  1. agrupamento: coleta (renderable, worldMatrix) da árvore e ordena
-//     por pipeline (troca mais cara) e depois por material;
-//  2. envio: escreve as matrizes no bufferzão nessa ordem, um writeBuffer;
-//  3. draw: itera na mesma ordem, trocando estado só quando muda.
 import { mat4, type Mat4 } from "wgpu-matrix";
-import { Node } from "./node";
-import type { Renderable } from "./renderable";
-import { RenderPassBit } from "./renderable";
+import { Node } from "../node";
+import type { Renderable } from "../renderable";
+import { RenderPassBit } from "../renderable";
+import { DEPTH_FORMAT } from "../meshPass";
 import {
     Material,
     UnshadedOpaque,
@@ -28,10 +35,8 @@ import {
     BIND_GROUP_OBJECT,
     BIND_GROUP_MATERIAL,
     type PipelineContext,
-} from "./material";
+} from "../material";
 
-/** Formato do depth deste pass — exportado pra quem compartilha o alvo. */
-export const DEPTH_FORMAT: GPUTextureFormat = "depth24plus";
 const FLOATS_PER_MAT4 = 16;
 
 interface DrawItem {
@@ -41,7 +46,7 @@ interface DrawItem {
     world: Mat4;
 }
 
-export class MeshRenderPass {
+export class TransparentSlicesRenderPass {
     private readonly device: GPUDevice;
     private readonly ctx: PipelineContext;
 
@@ -62,7 +67,7 @@ export class MeshRenderPass {
     private colorTexture: GPUTexture | null = null;
     private depthTexture: GPUTexture | null = null;
     private _colorView: GPUTextureView | null = null;
-    private _depthView: GPUTextureView | null = null;
+    private depthView: GPUTextureView | null = null;
 
     //Renderable sem material atribuído desenha com este magenta berrante:
     //melhor um "esqueci o material" gritando que um objeto invisível.
@@ -72,29 +77,18 @@ export class MeshRenderPass {
     //"clear" (default) quando este pass é o primeiro a tocar o alvo.
     private readonly colorLoadOp: GPULoadOp;
 
-    //"store" quando outro pass roda DEPOIS deste testando contra o depth
-    //dos opacos (ex.: fatias translúcidas); "discard" (default) quando
-    //ninguém lê o depth depois do pass.
-    private readonly depthStoreOp: GPUStoreOp;
-
-    constructor(
-        device: GPUDevice,
-        colorFormat: GPUTextureFormat,
-        colorLoadOp: GPULoadOp = "clear",
-        depthStoreOp: GPUStoreOp = "discard",
-    ) {
+    constructor(device: GPUDevice, colorFormat: GPUTextureFormat, colorLoadOp: GPULoadOp = "clear") {
         this.device = device;
         this.colorLoadOp = colorLoadOp;
-        this.depthStoreOp = depthStoreOp;
 
         const frameBindGroupLayout = device.createBindGroupLayout({
-            label: "mesh pass frame (grupo 0)",
+            label: "transparent slices frame (grupo 0)",
             entries: [
                 { binding: 0, visibility: GPUShaderStage.VERTEX, buffer: { type: "uniform" } },
             ],
         });
         const objectBindGroupLayout = device.createBindGroupLayout({
-            label: "mesh pass objeto (grupo 1)",
+            label: "transparent slices objeto (grupo 1)",
             entries: [
                 {
                     binding: 0,
@@ -112,12 +106,12 @@ export class MeshRenderPass {
         };
 
         this.frameBuffer = device.createBuffer({
-            label: "mesh pass frame (view + proj)",
+            label: "transparent slices frame (view + proj)",
             size: this.frameData.byteLength,
             usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
         });
         this.frameBindGroup = device.createBindGroup({
-            label: "mesh pass frame",
+            label: "transparent slices frame",
             layout: frameBindGroupLayout,
             entries: [{ binding: 0, resource: { buffer: this.frameBuffer } }],
         });
@@ -129,27 +123,15 @@ export class MeshRenderPass {
     /** A textura de cor com o resultado do pass — o que o final pass compõe. */
     get colorView(): GPUTextureView {
         if (!this._colorView) {
-            throw new Error("MeshRenderPass.colorView lido antes do primeiro render().");
+            throw new Error("TransparentSlicesRenderPass.colorView lido antes do primeiro render().");
         }
         return this._colorView;
-    }
-
-    /**
-     * O depth dos opacos, pra um pass posterior testar oclusão contra ele.
-     * Só tem conteúdo válido se o pass foi construído com depthStoreOp
-     * "store" — com "discard" o que está aqui é lixo.
-     */
-    get depthView(): GPUTextureView {
-        if (!this._depthView) {
-            throw new Error("MeshRenderPass.depthView lido antes de ensureTargets().");
-        }
-        return this._depthView;
     }
 
     render(encoder: GPUCommandEncoder, root: Node, width: number, height: number): void {
         this.ensureTargets(width, height);
 
-        //---- 1. agrupamento ----
+        //---- 1. coleta — SEM sort, a ordem da árvore É a ordem de draw ----
         const items: DrawItem[] = [];
         let cameraNode: Node | null = null;
         //Só lê o cache de worldMatrix, que o World.update deste frame já
@@ -159,9 +141,9 @@ export class MeshRenderPass {
             if (node.camera && !cameraNode) {
                 cameraNode = node; //primeira câmera achada é A câmera
             }
-            //só desenha quem aceita o main pass — o cubo do skybox, por
-            //exemplo, vive na árvore mas não tem esse bit
-            if (node.renderable && node.renderable.passMask & RenderPassBit.Main) {
+            //só desenha quem aceita este pass — objetos comuns (bit Main)
+            //vivem na mesma árvore mas não entram aqui
+            if (node.renderable && node.renderable.passMask & RenderPassBit.TransparentSlices) {
                 const material = node.renderable.material ?? this.fallbackMaterial;
                 items.push({
                     renderable: node.renderable,
@@ -176,19 +158,9 @@ export class MeshRenderPass {
         };
         collect(root);
 
-        //Ordena por pipeline e, dentro do pipeline, por material — os ids
-        //são só a ordem de primeira aparição, pra ter chave estável.
-        const pipelineIds = new Map<GPURenderPipeline, number>();
-        const materialIds = new Map<Material, number>();
-        for (const item of items) {
-            if (!pipelineIds.has(item.pipeline)) pipelineIds.set(item.pipeline, pipelineIds.size);
-            if (!materialIds.has(item.material)) materialIds.set(item.material, materialIds.size);
-        }
-        items.sort(
-            (a, b) =>
-                pipelineIds.get(a.pipeline)! - pipelineIds.get(b.pipeline)! ||
-                materialIds.get(a.material)! - materialIds.get(b.material)!,
-        );
+        //Aqui NÃO se ordena por pipeline/material como no MeshRenderPass:
+        //aquilo é otimização de troca de estado, e com blend a ordem é
+        //corretude. Reordenar os children do nó-pilha reordena os draws.
 
         //---- 2. envio ----
         if (cameraNode) {
@@ -199,7 +171,7 @@ export class MeshRenderPass {
             this.frameData.set(cam.camera!.getProjectionMatrix(), FLOATS_PER_MAT4);
             this.device.queue.writeBuffer(this.frameBuffer, 0, this.frameData);
         } else if (items.length > 0) {
-            console.warn("MeshRenderPass: nenhum nó com camera no mundo — nada será desenhado.");
+            console.warn("TransparentSlicesRenderPass: nenhum nó com camera no mundo — nada será desenhado.");
             items.length = 0;
         }
 
@@ -221,7 +193,7 @@ export class MeshRenderPass {
 
         //---- 3. draw, na mesma ordem do envio ----
         const pass = encoder.beginRenderPass({
-            label: "mesh pass",
+            label: "transparent slices pass",
             colorAttachments: [
                 {
                     view: this._colorView!,
@@ -230,11 +202,15 @@ export class MeshRenderPass {
                     storeOp: "store",
                 },
             ],
+            //O depth existe pra honrar o contrato do PipelineContext (todo
+            //pipeline de material declara depth24plus). As fatias testam
+            //contra ele mas NÃO escrevem (depthWriteEnabled: false no
+            //material), então num mundo só de fatias ele fica no clear.
             depthStencilAttachment: {
-                view: this._depthView!,
+                view: this.depthView!,
                 depthLoadOp: "clear",
                 depthClearValue: 1.0, //fundo = o mais longe possível
-                depthStoreOp: this.depthStoreOp,
+                depthStoreOp: "discard", //ninguém lê o depth depois do pass
             },
         });
         pass.setBindGroup(BIND_GROUP_FRAME, this.frameBindGroup);
@@ -269,12 +245,12 @@ export class MeshRenderPass {
         this.objectCapacity = capacity;
         this.modelData = new Float32Array(capacity * FLOATS_PER_MAT4);
         this.objectBuffer = this.device.createBuffer({
-            label: "mesh pass model matrices",
+            label: "transparent slices model matrices",
             size: capacity * FLOATS_PER_MAT4 * 4,
             usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
         });
         this.objectBindGroup = this.device.createBindGroup({
-            label: "mesh pass objeto",
+            label: "transparent slices objeto",
             layout: this.ctx.objectBindGroupLayout,
             entries: [{ binding: 0, resource: { buffer: this.objectBuffer } }],
         });
@@ -289,14 +265,14 @@ export class MeshRenderPass {
         this.colorTexture = null;
         this.depthTexture = null;
         this._colorView = null;
-        this._depthView = null;
+        this.depthView = null;
         this.fallbackMaterial.destroy();
     }
 
     /**
      * Garante os alvos no tamanho pedido (recria só quando muda). Pública
-     * porque um pass que roda ANTES deste no mesmo alvo (ex.: skybox)
-     * precisa do colorView já existindo — o mundo chama isto primeiro.
+     * pra manter a simetria com o MeshRenderPass, caso um pass venha a
+     * rodar antes deste no mesmo alvo.
      */
     ensureTargets(width: number, height: number): void {
         if (this.colorTexture && this.colorTexture.width === width && this.colorTexture.height === height) {
@@ -305,7 +281,7 @@ export class MeshRenderPass {
         this.colorTexture?.destroy();
         this.depthTexture?.destroy();
         this.colorTexture = this.device.createTexture({
-            label: "mesh pass color",
+            label: "transparent slices color",
             size: [width, height],
             format: this.ctx.colorFormat,
             //RENDER_ATTACHMENT pra desenhar aqui, TEXTURE_BINDING pro
@@ -313,12 +289,12 @@ export class MeshRenderPass {
             usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING,
         });
         this.depthTexture = this.device.createTexture({
-            label: "mesh pass depth",
+            label: "transparent slices depth",
             size: [width, height],
             format: DEPTH_FORMAT,
             usage: GPUTextureUsage.RENDER_ATTACHMENT,
         });
         this._colorView = this.colorTexture.createView();
-        this._depthView = this.depthTexture.createView();
+        this.depthView = this.depthTexture.createView();
     }
 }

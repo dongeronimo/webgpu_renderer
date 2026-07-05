@@ -1,61 +1,86 @@
----
+# 1- Real Time Volume Rendering
 
-# What is real time volume rendering
+## What is real time volume rendering
 
 - Its the process of converting volumetric data (textures 3d, texture arrays etc), into images, in real time.
 - Real time means that the user can interact with it with decent speed (30fps+).
 - That imposes constraints on volume rendering
+- [TODO Imagem de volume]
 
-# WebGPU
-- A modern-ish graphical API that supercedes webgl.
-- Looks a lot like a VERY simplified vulkan.
-- Can be used in browsers or natively with rust or c++ libs.
-  - We'll use in browser - Chromium based, most adherent to the standard.
-- It can also be used for compute instead of graphics giving javascript webapps some serious number crunching power.
-- Lacks capabilities that graphic programmers are used to rely on: 
-  - Bindless
-  - Other shaders beyond VS, FS and Compute
-  - Async compute
+## Data
+- Structured data: textures3d, texture arrays. The data is dense spatially. 
+- Sparse data: Augmented Reality data points, fluids, scattered scientific data.
+- The way the data is stored and what it represents matter because some techniques are better for one kind of data and worse for others
+- For example, raymarchers are better for structured data while splatters are for sparse data
 
-#  Real Time Volume Rendering Techniques
+## Techniques
+- Stack of slices 
+  - Use the uvw texture coords to sample the 3d texture.
+  - Relies on blending fixed function.
+- Raymarcher
+  - Marches along rays, sampling and accumulating the values. 
+- Fourier volume rendering
+  - Slices in frequency domain, projection in spatial domain. Very fast but can't do occlusion.
+- Splatting
+   - Projects each voxel on screen like a splatter (gaussian kernel or something like that) accumulating contributions. 
+- We'll focus on Stack of Slices and Raymarcher.
 
-- How do we do the real time volume rendering? 
-- The best techquinque vary with the evolution of the hardware, the user requirements and the dataset.
-- GPUs don't understand volume, they understand meshes (vertex shader, fragment shaders, etc). So we use workarounds using meshes to trigger the volumetric render algorithm or to fake volume.
+# 2 - The complexities of volume rendering 
 
-# Texture stack:
-- the 3d texture is "sliced" by many planes, rendered with blending on
-- Old technique, was used in the 90s and early 2000s when the GPUs were weak and fixedfunction
-- Bottleneck at the blending step and lots of fragments discarded, modern GPUs don'tlike this technique too much.
-- Was the only way to offload work to GPU in the past.
-
-# Volume Raymarch:
-- Rays march thru the volume data, sampling the texture and accumulating the colour ofthe fragment.
-- In the past was done CPU side, nowadays it's the default technique for volumerendering GPU side.
-- Cost increases with the size of the data and the number of rays.
-  - Rays depend on the amount of fragments and the amount of fragments depend on screensize and camera distance from the mesh.
-- Fully paralelizable: Each ray is fully independent from each other.
-  - Perfect for fragment shaders or compute shaders.
-- Costs can grow very very fast, need optimizations   
-
-# Constraints
+## Constraints
 - Quality x Space x Speed
 - Can have 2 but not the three at the same time.
 - Quality increases space costs somewhat (lookup tables, auxiliary textures) and Speed costs A LOT.
 - Speed is acheived by doing less. To do less we need to sacrifice space using pre-calculated data or quality by actually doing less processing.
 - Space matters because GPU memory is not infinite and data transfer has a cost
   - specially in mobile and web (our case here)
-  
-# Example of constraints - Gradient
+- [TODO o triangulo das escolhas]
+
+## Example of constraints - Gradient
 - Gradient data is the rate of change of the image in a given point p.
-- It gives us surface information: where the data is changing, and the surface of that change.
+- It gives us surface information - where the data is changing, and the surface of that change.
 - It is either a vec3 (dX, dY, dZ) or a vec4 (dX, dY, dZ, mag)
 - if the data is a scalar, lets say a f32, the gradient is 4x the size of the data.
-- Calculating the gradient in runtime:
+- [TODO imagem de uma derivada parcial no r3]
+
+## Gradient constraints
+- Calculating the gradient in runtime -
   - trade speed (8x texture fetches + triliear interpolations) for space (no need for a large texture to hold the gradients)
-- Caching the gradient in a precalculated texture:
+- Caching the gradient in a precalculated texture -
   - trade space (the gradient texture can be huge) for speed (1x texture fetch, all calculations already done).
-- Or we could forego the gradient and quality (can't do lighting without gradients) for speed and space (no need for the gradient texture and zero texture fetches if no gradients).
+- Or we could forego the gradient and quality (can't do lighting without gradients) for speed and space (no need for the gradient texture and zero gradient texture fetches if no gradients).
+- [TODO 2 imagens, uma minha com gradient on outra com gradient off]
+
+## Where we'll pay the price?
+- Slice stacks pay the price on the blender fixed function
+- Raymarchers pay on the fragment or compute shader.
+- Preprocessing pay on the CPU, on the memory transfer to the GPU (if the data was processed in the CPU) or in the compute shader (if the data was processed in the GPU).
+-
+
+
+
+##  Real Time Volume Rendering Techniques
+
+- How do we do the real time volume rendering? 
+- The best techquinque vary with the evolution of the hardware, the user requirements and the dataset.
+- GPUs don't understand volume, they understand meshes (vertex shader, fragment shaders, etc). So we use workarounds using meshes to trigger the volumetric render algorithm or to fake volume.
+
+## Texture stack:
+- the 3d texture is "sliced" by many planes, rendered with blending on
+- Old technique, was used in the 90s and early 2000s when the GPUs were weak and fixedfunction
+- Bottleneck at the blending step and lots of fragments discarded, modern GPUs don'tlike this technique too much.
+- Was the only way to offload work to GPU in the past.
+
+
+## Volume Raymarch:
+- Rays march thru the volume data, sampling the texture and accumulating the colour ofthe fragment.
+- In the past was done CPU side, nowadays it's the default technique for volumerendering GPU side.
+- Cost increases with the size of the data and the number of rays.
+  - Rays depend on the amount of fragments and the amount of fragments depend on screensize and camera distance from the mesh.
+- Fully paralelizable - Each ray is fully independent from each other.
+  - Perfect for fragment shaders or compute shaders.
+- Costs can grow very very fast, need optimizations   
+
 
 --- 
 # Extras

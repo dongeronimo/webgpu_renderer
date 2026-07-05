@@ -209,6 +209,6 @@ python dicom_converter.py -i ./dicom_data -o ./output --no-anonymize
 ### Dependências
 
 ```bash
-pip install numpy pydicom
-pip install cupy-cuda12x   # opcional, para suavização na GPU
+pip install -r requirements.txt
+pip install cupy-cuda12x   # opcional, para suavização na GPU (ajuste à sua versão do CUDA)
 ```

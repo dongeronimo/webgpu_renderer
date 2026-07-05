@@ -11,7 +11,9 @@ import type { World } from "../world";
 import { usePolled } from "./usePolled";
 import { TextureStackVolumeRenderUIRoot } from "./TextureStackVolumeRenderUIRoot";
 
-function TerraPositionTable({ world }: { world: World }) {
+//export: componente do mundo solar, fora de uso enquanto o mundo ativo é o
+//VR — o export evita o erro de "não usado" e ele volta quando o mundo voltar
+export function TerraPositionTable({ world }: { world: World }) {
     //Snapshot da translação global (colunas 12/13/14 da worldMatrix) —
     //array novo a cada leitura, nunca a referência viva da matriz.
     const pos = usePolled(() => {
@@ -41,7 +43,8 @@ function TerraPositionTable({ world }: { world: World }) {
     );
 }
 
-function HelloButton() {
+//export pelo mesmo motivo do TerraPositionTable
+export function HelloButton() {
     const dispatch = useDispatch<AppDispatch>();
     const clickCount = useSelector((state: RootState) => state.hello.clickCount);
     return (
@@ -51,7 +54,9 @@ function HelloButton() {
     );
 }
 
-export function App({ world }: { world: World }) {
+//world com _ enquanto a UI do VR não lê o scene graph (o prop continua
+//chegando do mountUi — quando precisar, é só tirar o _)
+export function App({ world: _world }: { world: World }) {
     return (
         //pointerEvents:"auto" religa o mouse SÓ neste painel — o resto do
         //overlay (#ui-root, pointer-events:none) deixa o clique atravessar

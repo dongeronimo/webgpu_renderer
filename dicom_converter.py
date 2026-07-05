@@ -8,14 +8,24 @@ Includes optional anonymization for patient data protection.
 
 import os
 import sys
+
+# No Windows, stdout redirecionado usa cp1252 e os ✓/✗/⚠ dos prints quebram
+if sys.stdout.encoding and sys.stdout.encoding.lower() != 'utf-8':
+    sys.stdout.reconfigure(encoding='utf-8')
 import json
 import argparse
 import hashlib
 from pathlib import Path
 from typing import List, Dict, Any
-import numpy as np
-import pydicom
-from pydicom.errors import InvalidDicomError
+try:
+    import numpy as np
+    import pydicom
+    from pydicom.errors import InvalidDicomError
+except ImportError as e:
+    print(f"✗ Dependência ausente: {e.name}")
+    print("  Instale as dependências com:")
+    print("    pip install -r requirements.txt")
+    sys.exit(1)
 
 # Optional GPU acceleration
 try:

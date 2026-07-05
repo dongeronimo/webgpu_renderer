@@ -3,12 +3,12 @@ import { mountUi } from "./ui/mountUi";
 import { registerBehaviour } from "./behaviour";
 import { RotationBehaviour } from "./rotation_behaviour";
 import { SolRotationBehaviour } from "./solarSystem/sunRotationBehaviour";
-import { SolarSystem } from "./solarSystem/solarSystemWorld";
+// import { SolarSystem } from "./solarSystem/solarSystemWorld"; //mundo anterior, ver bloco comentado abaixo
 import { SetSunColourBehaviour } from "./solarSystem/setSunColourBehaviour";
 import { TerraTranslationBehaviour } from "./solarSystem/terraTranslationBehaviour";
 import { MoonTranslationBehaviour } from "./solarSystem/moonTranslationBehaviour";
 import { TerraRotationBehaviour } from "./solarSystem/terraRotationBehaviour";
-import { TextureStackVolumeRenderer } from "./textureStackVolumeRender/textureStackVRWorld";
+import { TextureStackVolumeRendererSynthetic } from "./textureStackVolumeRenderSynthetic/textureStackVRWorldSynthetic";
 const status = document.getElementById("status")!;
 // Todas as behaviours que o sistema for usar tem que ser registradas aqui devido
 // a falta de reflection de verdade depois da minificaçaõ, que caga os nomes das
@@ -47,7 +47,7 @@ async function main() {
   // await solarSystem.createWorld({aspect:canvas.width/canvas.height, fovy:45, near:0.1, far:100});
 
 
-  const textureVRWorld = new TextureStackVolumeRenderer(device);
+  const textureVRWorld = new TextureStackVolumeRendererSynthetic(device);
   textureVRWorld.createRenderPasses(canvas,  canvasFormat);
   await textureVRWorld.createWorld({aspect:canvas.width/canvas.height, fovy:45, near:0.1, far:100});
   //UI React no overlay por cima do canvas; recebe o mundo pra poder ler

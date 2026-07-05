@@ -4,7 +4,9 @@
 //Formato de vértice, intercalado num único vertex buffer:
 //  StaticMesh:  vx vy vz nx ny nz u v                          → 32 bytes/vértice
 //  SkinnedMesh: vx vy vz nx ny nz u v id1..id4 w1..w4          → 64 bytes/vértice
-//(ids de junta como uint32, pesos como float32)
+//  SliceMesh:   vx vy vz u v w                                 → 24 bytes/vértice
+//(ids de junta como uint32, pesos como float32; SliceMesh mora em
+//textureStackVolumeRender/sliceMesh.ts — é específica do VR por fatias)
 //
 //Os índices são sempre uint32 (o loader converte u8/u16 na carga), então
 //o indexFormat é fixo.
@@ -12,6 +14,8 @@
 export enum MeshType {
   Static,
   Skinned,
+  /** Fatia do VR clássico: posição + UVW, gerada em runtime (SliceMesh). */
+  VolumeSlice,
 }
 
 export abstract class Mesh {
@@ -27,12 +31,15 @@ export abstract class Mesh {
   //vertexData já vem intercalado no formato da subclasse.
   //mappedAtCreation evita um writeBuffer na queue: o buffer nasce mapeado,
   //copiamos os bytes e desmapeamos.
+  //extraVertexUsage: flags ADICIONAIS pro vertex buffer — mesh dinâmica
+  //(SliceMesh) passa COPY_DST pra poder reescrever os vértices depois.
   constructor(
     device: GPUDevice,
     name: string,
     vertexData: ArrayBuffer,
     indices: Uint32Array,
     bytesPerVertex: number,
+    extraVertexUsage: GPUBufferUsageFlags = 0,
   ) {
     this.name = name;
     this.vertexCount = vertexData.byteLength / bytesPerVertex;
@@ -41,7 +48,7 @@ export abstract class Mesh {
     this.vertexBuffer = device.createBuffer({
       label: `${name} (vertices)`,
       size: vertexData.byteLength,
-      usage: GPUBufferUsage.VERTEX,
+      usage: GPUBufferUsage.VERTEX | extraVertexUsage,
       mappedAtCreation: true,
     });
     new Uint8Array(this.vertexBuffer.getMappedRange()).set(new Uint8Array(vertexData));
