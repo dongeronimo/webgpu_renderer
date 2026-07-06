@@ -8,12 +8,16 @@ import { helloClicked } from "../redux/actions";
 import type { RootState } from "../redux/reducers";
 import type { AppDispatch } from "../redux/store";
 import type { World } from "../world";
+import { SolarSystem } from "../solarSystem/solarSystemWorld";
+import { TextureStackVolumeRendererSynthetic } from "../textureStackVolumeRenderSynthetic/textureStackVRWorldSynthetic";
+import { TextureStackVolumeRendererCT } from "../textureStackVolumeRenderCT/textureStackVolumeRenderCTWorld";
 import { usePolled } from "./usePolled";
 import { TextureStackVolumeRenderUIRoot } from "./TextureStackVolumeRenderUIRoot";
+import TbCTRenderProperties from "./textureBasedCT/tbCTRenderProperties";
 import { WorldSwitch } from "./base/WorldSwitch";
+import { FloatingPanel } from "./generic/FloatingPanel";
+import { GpuStats } from "./GpuStats";
 
-//export: componente do mundo solar, fora de uso enquanto o mundo ativo é o
-//VR — o export evita o erro de "não usado" e ele volta quando o mundo voltar
 export function TerraPositionTable({ world }: { world: World }) {
     //Snapshot da translação global (colunas 12/13/14 da worldMatrix) —
     //array novo a cada leitura, nunca a referência viva da matriz.
@@ -44,7 +48,6 @@ export function TerraPositionTable({ world }: { world: World }) {
     );
 }
 
-//export pelo mesmo motivo do TerraPositionTable
 export function HelloButton() {
     const dispatch = useDispatch<AppDispatch>();
     const clickCount = useSelector((state: RootState) => state.hello.clickCount);
@@ -55,28 +58,48 @@ export function HelloButton() {
     );
 }
 
-//world com _ enquanto a UI do VR não lê o scene graph (o prop continua
-//chegando do mountUi — quando precisar, é só tirar o _)
-export function App({ world: _world }: { world: World }) {
+//UI do mundo solar: os dois componentes-demo num painel próprio.
+function SolarSystemUIRoot({ world }: { world: World }) {
     return (
-        //pointerEvents:"auto" religa o mouse SÓ neste painel — o resto do
-        //overlay (#ui-root, pointer-events:none) deixa o clique atravessar
-        //até o canvas
-        <div
-            style={{
-                position: "absolute",
-                top: 8,
-                right: 8,
-                pointerEvents: "auto",
-                background: "rgba(0, 0, 0, 0.6)",
-                color: "#ddd",
-                font: "12px monospace",
-                padding: 12,
-                borderRadius: 8,
-            }}
-        >
-            <TextureStackVolumeRenderUIRoot/>
-            <WorldSwitch/>
-        </div>
+        <FloatingPanel title="Sistema Solar" width={240} height="auto" style={{ top: 8, left: 8 }}>
+            <TerraPositionTable world={world} />
+            <HelloButton />
+        </FloatingPanel>
+    );
+}
+
+//Qual UI acompanha qual mundo — decidido pela PROP world (instanceof), e
+//NÃO pelo currentWorld do redux, de propósito: o redux carrega intenção e
+//muda no clique, antes do engine trocar; a prop muda no setUiWorld() do
+//main, no mesmo instante em que o mundo novo vira o ativo. Atômico.
+function WorldUi({ world }: { world: World }) {
+    if (world instanceof TextureStackVolumeRendererSynthetic) {
+        return <TextureStackVolumeRenderUIRoot />;
+    }
+    if (world instanceof SolarSystem) {
+        return <SolarSystemUIRoot world={world} />;
+    }
+    if (world instanceof TextureStackVolumeRendererCT) {
+        return <TbCTRenderProperties world={world} />;
+    }
+    //mundo sem UI própria: fica só o WorldSwitch na tela
+    return null;
+}
+
+export function App({ world }: { world: World }) {
+    //Sem div posicionado aqui: cada painel é um FloatingPanel que se
+    //posiciona sozinho e religa o próprio pointer-events. O WorldSwitch
+    //vive FORA do WorldUi porque pertence à app, não a um mundo — ele
+    //sobrevive à troca com estado (drag/minimizado) intacto.
+    return (
+        <>
+            <WorldSwitch />
+            {/*desempenho é da app, como o WorldSwitch: é o instrumento de
+               comparação ENTRE mundos, sobrevive à troca*/}
+            <FloatingPanel title="Desempenho" width={200} height="auto" style={{ bottom: 8, left: 8 }}>
+                <GpuStats />
+            </FloatingPanel>
+            <WorldUi world={world} />
+        </>
     );
 }

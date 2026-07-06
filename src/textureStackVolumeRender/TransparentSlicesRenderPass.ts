@@ -28,6 +28,7 @@ import { Node } from "../node";
 import type { Renderable } from "../renderable";
 import { RenderPassBit } from "../renderable";
 import { DEPTH_FORMAT } from "../meshPass";
+import { gpuTimer } from "../gpuTimer";
 import {
     Material,
     UnshadedOpaque,
@@ -194,11 +195,12 @@ export class TransparentSlicesRenderPass {
         //---- 3. draw, na mesma ordem do envio ----
         const pass = encoder.beginRenderPass({
             label: "transparent slices pass",
+            timestampWrites: gpuTimer.timestampWrites("slices"),
             colorAttachments: [
                 {
                     view: this._colorView!,
                     loadOp: this.colorLoadOp,
-                    clearValue: { r: 0.39, g: 0.58, b: 0.93, a: 1 }, //cornflower blue
+                    clearValue: { r: 0, g: 0, b: 0, a: 1 }, //preto
                     storeOp: "store",
                 },
             ],

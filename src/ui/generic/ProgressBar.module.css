@@ -1,0 +1,36 @@
+/* Aparência única da ProgressBar — trilho igual ao do Slider, preenchimento
+   no azul primary da paleta. */
+
+.track {
+    height: 6px;
+    border-radius: 3px;
+    background: rgba(255, 255, 255, 0.25);
+    /* o fill quadrado é clipado pelo raio do trilho */
+    overflow: hidden;
+}
+
+.fill {
+    height: 100%;
+    background: #2b6cb0;
+    /* suaviza incrementos discretos (ex.: fatia a fatia num loader) */
+    transition: width 120ms ease;
+}
+
+/* Indeterminado: um segmento de 40% do trilho deslizando em loop.
+   translateX em % é relativo à LARGURA DO PRÓPRIO fill: -100% esconde à
+   esquerda; 250% × 40% = 100% do trilho, escondido à direita. */
+.fillIndeterminate {
+    height: 100%;
+    width: 40%;
+    background: #2b6cb0;
+    animation: progressSlide 1.2s ease-in-out infinite;
+}
+
+@keyframes progressSlide {
+    from {
+        transform: translateX(-100%);
+    }
+    to {
+        transform: translateX(250%);
+    }
+}

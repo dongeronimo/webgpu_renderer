@@ -18,6 +18,7 @@
 //  2. envio: escreve as matrizes no bufferzão nessa ordem, um writeBuffer;
 //  3. draw: itera na mesma ordem, trocando estado só quando muda.
 import { mat4, type Mat4 } from "wgpu-matrix";
+import { gpuTimer } from "./gpuTimer";
 import { Node } from "./node";
 import type { Renderable } from "./renderable";
 import { RenderPassBit } from "./renderable";
@@ -222,6 +223,7 @@ export class MeshRenderPass {
         //---- 3. draw, na mesma ordem do envio ----
         const pass = encoder.beginRenderPass({
             label: "mesh pass",
+            timestampWrites: gpuTimer.timestampWrites("mesh"),
             colorAttachments: [
                 {
                     view: this._colorView!,

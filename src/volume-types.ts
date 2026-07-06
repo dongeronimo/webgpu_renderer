@@ -157,6 +157,16 @@ export interface ChunkHistograms {
 }
 
 /**
+ * Lê um valor numérico de uma tag DICOM serializada (string ou string[] —
+ * multivalor pega o índice pedido). NaN se ausente/inválida — o chamador
+ * decide o fallback.
+ */
+export function dicomTagNumber(value: DicomTagValue, index = 0): number {
+  const raw = Array.isArray(value) ? value[index] : index === 0 ? value : undefined;
+  return raw === undefined || raw === "" ? NaN : parseFloat(raw);
+}
+
+/**
  * Índice do primeiro bin do chunk (x, y, z) dentro de ChunkHistograms.counts.
  * O histograma do chunk ocupa counts[offset .. offset + histogramBins).
  */

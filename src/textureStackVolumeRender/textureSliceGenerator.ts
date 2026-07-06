@@ -44,9 +44,12 @@ const EDGES: ReadonlyArray<readonly [number, number]> = [
 export class TextureSliceGenerator extends Behaviour {
     private readonly device: GPUDevice;
     private readonly material: Material;
-    private readonly sliceCount: number;
+    private sliceCount: number;
 
     private meshes: SliceMesh[] = [];
+    //os nós-fatia criados por createSliceNodes — guardados pra poder
+    //derrubá-los num setSliceCount
+    private sliceNodes: Node[] = [];
     private created = false;
     private cameraNode: Node | null = null;
     private warnedNoCamera = false;
@@ -98,6 +101,46 @@ export class TextureSliceGenerator extends Behaviour {
             mesh.destroy();
         }
         this.meshes = [];
+        this.sliceNodes = [];
+    }
+
+    /**
+     * Troca a quantidade de fatias EM VIVO: derruba os nós-fatia atuais e
+     * recria com a contagem nova, regenerando os vértices JÁ — sem esperar
+     * o próximo update, senão haveria um frame com o volume sumido (e num
+     * arrasto de slider contínuo, sumido o arrasto inteiro).
+     *
+     * Seguro chamar de outra behaviour do MESMO nó (é o caso de uso): as
+     * behaviours de um nó rodam antes da travessia descer pros filhos,
+     * então mexer nos filhos aqui é o mesmo contrato do createSliceNodes
+     * — os nós novos são visitados neste mesmo frame.
+     */
+    setSliceCount(count: number): void {
+        if (count === this.sliceCount) {
+            return;
+        }
+        this.sliceCount = count;
+        for (const mesh of this.meshes) {
+            mesh.destroy();
+        }
+        this.meshes = [];
+        for (const sliceNode of this.sliceNodes) {
+            this.node.removeChild(sliceNode);
+        }
+        this.sliceNodes = [];
+        this.createSliceNodes();
+        this.created = true; //o update não deve criar de novo
+        const camera = this.findCamera();
+        if (camera) {
+            //mesma leitura de worldMatrix do caminho normal do update
+            //(pode ter 1 frame de atraso; converge no seguinte)
+            this.regenerate(camera);
+            this.lastCamera.set(camera.worldMatrix);
+            this.lastStack.set(this.node.worldMatrix);
+            this.hasSnapshot = true;
+        } else {
+            this.hasSnapshot = false; //update regenera quando houver câmera
+        }
     }
 
     private createSliceNodes(): void {
@@ -114,6 +157,7 @@ export class TextureSliceGenerator extends Behaviour {
             sliceNode.renderable.material = this.material;
             sliceNode.renderable.passMask = RenderPassBit.TransparentSlices;
             this.node.addChild(sliceNode);
+            this.sliceNodes.push(sliceNode);
         }
     }
 

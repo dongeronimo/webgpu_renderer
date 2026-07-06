@@ -14,6 +14,7 @@
 //são do pass, não passam pelo sistema de materiais — skybox não é objeto
 //de cena com material, é infra de renderização.
 import { mat4 } from "wgpu-matrix";
+import { gpuTimer } from "./gpuTimer";
 import { Node } from "./node";
 import { MeshType, StaticMesh } from "./mesh";
 import type { Renderable } from "./renderable";
@@ -176,6 +177,7 @@ export class SkyboxRenderPass {
 
         const pass = encoder.beginRenderPass({
             label: "skybox pass",
+            timestampWrites: gpuTimer.timestampWrites("skybox"),
             colorAttachments: [
                 {
                     view: target,

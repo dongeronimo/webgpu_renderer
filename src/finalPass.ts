@@ -12,6 +12,8 @@
 //(sem vertex buffer) cobrindo a tela inteira. Como o alvo do mesh pass
 //tem o mesmo tamanho do backbuffer, a leitura é 1:1 por textureLoad —
 //coordenada de pixel direto, sem sampler.
+import { gpuTimer } from "./gpuTimer";
+
 const BLIT_WGSL = /* wgsl */ `
 @vertex
 fn vs(@builtin(vertex_index) i: u32) -> @builtin(position) vec4f {
@@ -101,6 +103,7 @@ export class FinalRenderPass {
 
     const pass = encoder.beginRenderPass({
       label: "final pass",
+      timestampWrites: gpuTimer.timestampWrites("final"),
       colorAttachments: [
         {
           view: backbuffer.createView(),

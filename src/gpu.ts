@@ -15,7 +15,11 @@ export async function initWebGPU(): Promise<GpuContext> {
     throw new Error("No suitable GPU adapter found.");
   }
 
-  const device = await adapter.requestDevice();
+  //timestamp-query: medir tempo de GPU por pass (gpuTimer). Opcional —
+  //sem ela o contador de fps só não mostra os tempos de GPU.
+  const device = await adapter.requestDevice({
+    requiredFeatures: adapter.features.has("timestamp-query") ? ["timestamp-query"] : [],
+  });
 
   device.lost.then((info) => {
     console.error(`GPU device lost (${info.reason}): ${info.message}`);

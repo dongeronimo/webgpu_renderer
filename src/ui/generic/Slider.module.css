@@ -1,0 +1,72 @@
+/* Aparência única do Slider — mesma paleta do Button (primary #2b6cb0,
+   hover #3182ce). Estilizar range nativo = appearance:none no host e
+   redesenhar track/thumb nos pseudo-elementos, duplicados por engine
+   (::-webkit-* pra Chrome/Edge/Safari, ::-moz-* pro Firefox — o browser
+   ignora o bloco do seletor que não conhece, por isso não dá pra agrupar
+   os dois num seletor só). */
+
+.slider {
+    appearance: none;
+    -webkit-appearance: none;
+    width: 100%;
+    /* área de clique/toque maior que o trilho desenhado */
+    height: 16px;
+    margin: 0;
+    background: transparent;
+    cursor: pointer;
+}
+
+.slider:disabled {
+    opacity: 0.45;
+    cursor: default;
+}
+
+.slider:focus-visible {
+    outline: 2px solid #7ab8ff;
+    outline-offset: 2px;
+    border-radius: 8px;
+}
+
+/* trilho */
+
+.slider::-webkit-slider-runnable-track {
+    height: 4px;
+    border-radius: 2px;
+    background: rgba(255, 255, 255, 0.25);
+}
+
+.slider::-moz-range-track {
+    height: 4px;
+    border-radius: 2px;
+    background: rgba(255, 255, 255, 0.25);
+}
+
+/* knob */
+
+.slider::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 12px;
+    height: 12px;
+    border: none;
+    border-radius: 50%;
+    background: #2b6cb0;
+    /* centra o knob de 12px no trilho de 4px: (12-4)/2 */
+    margin-top: -4px;
+}
+
+.slider::-moz-range-thumb {
+    width: 12px;
+    height: 12px;
+    border: none;
+    border-radius: 50%;
+    background: #2b6cb0;
+}
+
+.slider:hover:not(:disabled)::-webkit-slider-thumb {
+    background: #3182ce;
+}
+
+.slider:hover:not(:disabled)::-moz-range-thumb {
+    background: #3182ce;
+}

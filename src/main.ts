@@ -1,4 +1,5 @@
 import { initWebGPU } from "./gpu";
+import { gpuTimer } from "./gpuTimer";
 import { mountUi } from "./ui/mountUi";
 import { registerBehaviour } from "./behaviour";
 import { RotationBehaviour } from "./rotation_behaviour";
@@ -13,6 +14,7 @@ import { WorldName } from "./redux/actions";
 import { store } from "./redux/store";
 import { World } from "./world";
 import { SolarSystem } from "./solarSystem/solarSystemWorld";
+import { TextureStackVolumeRendererCT } from "./textureStackVolumeRenderCT/textureStackVolumeRenderCTWorld";
 const status = document.getElementById("status")!;
 // Todas as behaviours que o sistema for usar tem que ser registradas aqui devido
 // a falta de reflection de verdade depois da minificaçaõ, que caga os nomes das
@@ -28,6 +30,7 @@ function registerBehaviours() {
 
 async function main() {
   const { adapter, device } = await initWebGPU();
+  gpuTimer.init(device); //timestamps de GPU por pass (no-op sem a feature)
   const info = adapter.info;
   status.textContent = `device ready — ${info.vendor} ${info.architecture}`;
   console.log("GPU device ready:", device);
@@ -77,29 +80,50 @@ async function main() {
       console.log("mundo escolhido mudou para:", chosenWorld);
       currentWorld.destroy();
       //nos cases: criar o mundo novo e aí currentWorld = novo; setUiWorld(novo);
-      switch(chosenWorld) {
-        case "solarSystem":
-          const solarSystem = new SolarSystem(device);
-          solarSystem.createRenderPasses(canvas, canvasFormat);
-          await solarSystem.createWorld({aspect:canvas.width/canvas.height, fovy:45, near:0.1, far:100});
-          currentWorld = solarSystem;
-        break;
-        case "textureStackVolumeRenderSynthetic":
-          const textureVRWorld = new TextureStackVolumeRendererSynthetic(device);
-          textureVRWorld.createRenderPasses(canvas,  canvasFormat);
-          await textureVRWorld.createWorld({aspect:canvas.width/canvas.height, fovy:45, near:0.1, far:100});
-          currentWorld = textureVRWorld;
-        break;
+      try{
+         switch(chosenWorld) {
+           case "solarSystem":
+             const solarSystem = new SolarSystem(device);
+             solarSystem.createRenderPasses(canvas, canvasFormat);
+             await solarSystem.createWorld(
+               {aspect:canvas.width/canvas.height, fovy:45, near:0.1, far:100});
+             currentWorld = solarSystem;
+           break;
+           case "textureStackVolumeRenderSynthetic":
+             const textureVRSynthWorld = new TextureStackVolumeRendererSynthetic(device);
+             textureVRSynthWorld.createRenderPasses(canvas,  canvasFormat);
+             await textureVRSynthWorld.createWorld({aspect:canvas.width/canvas.height, fovy:45, near:0.1, far:100});
+             currentWorld = textureVRSynthWorld;
+             break;
+           case "textureStackVolumeRenderCT":
+             const textureVRCTWorld = new TextureStackVolumeRendererCT(device);
+             textureVRCTWorld.createRenderPasses(canvas,  canvasFormat);
+             await textureVRCTWorld.createWorld({aspect:canvas.width/canvas.height, fovy:45, near:0.1, far:100});
+             currentWorld = textureVRCTWorld;
+             break;
+         }
+         setUiWorld(currentWorld);
+      }catch(e){
+         console.error(e);
+         status.textContent = `falha criando mundo "${chosenWorld}": ${(e as Error).message}`;
+         return; //para o loop — não há mundo válido pra continuar renderizando
       }
+      lastTime = performance.now(); //zera o relógio: o tempo de carga não é deltaTime
+      requestAnimationFrame(frame);
     }
-    const deltaTime = (time - lastTime) / 1000; //segundos desde o frame anterior
-    currentWorld.update(deltaTime);
-    lastTime = time;
-    const encoder = device.createCommandEncoder();//O encoder conterá os comandos
-    //O mundo grava sua sequência de passes; o main só faz encoder/submit
-    currentWorld.render(encoder);
-    queue.submit([encoder.finish()]);
-    requestAnimationFrame(frame);
+    else {
+       const deltaTime = (time - lastTime) / 1000; //segundos desde o frame anterior
+       gpuTimer.beginFrame(); //zera os slots de timestamp e conta o fps
+       currentWorld.update(deltaTime);
+       lastTime = time;
+       const encoder = device.createCommandEncoder();//O encoder conterá os comandos
+       //O mundo grava sua sequência de passes; o main só faz encoder/submit
+       currentWorld.render(encoder);
+       gpuTimer.endFrame(encoder); //resolve as queries — antes do finish
+       queue.submit([encoder.finish()]);
+       gpuTimer.readback(); //leitura assíncrona do frame medido
+       requestAnimationFrame(frame);
+    }
   }
   requestAnimationFrame(frame);
 }

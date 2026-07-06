@@ -6,5 +6,6 @@ import { WorldName } from "../../redux/actions";
 //ganhar o rótulo dele.
 export const worldLabels: Record<WorldName, string> = {
     solarSystem: "Sistema Solar",
-    textureStackVolumeRenderSynthetic: "Volume Render (sintético)",
+    textureStackVolumeRenderSynthetic: "Texture-based slicing (sintético)",
+    textureStackVolumeRenderCT: "Texture-based slicing (CT)"
 };
