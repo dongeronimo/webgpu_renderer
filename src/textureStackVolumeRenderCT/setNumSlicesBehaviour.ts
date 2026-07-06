@@ -2,7 +2,10 @@
 //pelo padrão lastSeen das behaviours (getState() no update, sem subscribe
 //— callback nenhum segurando nó de mundo morto) e, quando
 //textureBasedCT.numSlices muda, acha a TextureSliceGenerator pendurada no
-//MESMO nó e troca o sliceCount dela.
+//MESMO nó e troca o sliceCount dela. Também avisa o MATERIAL (injetado no
+//construtor, como na SetCtfBehaviour): ele precisa da contagem pra
+//correção de opacidade — sem isso o slider de fatias também mudaria a
+//densidade acumulada da imagem.
 //
 //Bônus do polling: n dispatches no mesmo frame (slider arrastando) viram
 //UMA troca — a behaviour só vê o valor uma vez por frame.
@@ -12,11 +15,17 @@
 import { Behaviour } from "../behaviour";
 import { store } from "../redux/store";
 import { TextureSliceGenerator } from "../textureStackVolumeRender/textureSliceGenerator";
+import { TextureStackTransparentMaterial } from "../textureStackVolumeRender/textureStackTransparentMaterial";
+import { TextureStackPrecalculatedMaterial } from "./textureStackPrecalculatedGradientMaterial";
 
 export class SetNumSlicesBehaviour extends Behaviour {
-    //inicia com o valor corrente do store: o generator nasce com ele, então
-    //o primeiro update não conta como mudança
+    //inicia com o valor corrente do store: generator E material nascem com
+    //ele, então o primeiro update não conta como mudança
     private lastSeen = store.getState().textureBasedCT.numSlices;
+
+    constructor(private readonly material: TextureStackTransparentMaterial|TextureStackPrecalculatedMaterial) {
+        super();
+    }
 
     update(_deltaTime: number): void {
         const numSlices = store.getState().textureBasedCT.numSlices;
@@ -32,5 +41,6 @@ export class SetNumSlicesBehaviour extends Behaviour {
             return;
         }
         generator.setSliceCount(numSlices);
+        this.material.setSliceCount(numSlices); //correção de opacidade
     }
 }

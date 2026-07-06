@@ -7,6 +7,9 @@
 //  - a INSTÂNCIA carrega a textura 3D do volume (HU em r16float), o
 //    sampler linear, a LUT da CTF e os parâmetros (domínio da LUT + alpha).
 //
+//A diferença dessa versão para o textureStackTransparentMaterial é que essa
+//versão usa um gradiente rgba8 pré calculado e faz shading phong.
+//
 //O fragment aplica a COLOR TRANSFER FUNCTION: o HU sampleado vira índice
 //numa LUT 512×1 rgba8 rasterizada na CPU a partir dos pontos de controle
 //(CtfPoint — ver ctf.ts, que explica domínio e clamp). setCtf() troca a
@@ -23,7 +26,7 @@
 import { bakeCtfLut, CTF_LUT_WIDTH, type CtfPoint } from "../ctf";
 import { Material, type PipelineContext } from "../material";
 import { MeshType } from "../mesh";
-import { SliceMesh } from "./sliceMesh";
+import { SliceMesh } from "../textureStackVolumeRender/sliceMesh";
 
 /**
  * Contagem de fatias pra qual os alphas da CTF (e o alphaScale) são
@@ -36,6 +39,7 @@ const SLICES_WGSL = /* wgsl */ `
 struct Frame {
     view: mat4x4f,
     proj: mat4x4f,
+    cameraPos: vec4f,//novo
 };
 struct MaterialParams {
     ctfMin: f32,     //HU do primeiro ponto da CTF (início da LUT)
@@ -43,24 +47,31 @@ struct MaterialParams {
     alphaScale: f32, //dilui a opacidade da CTF pra UMA fatia da pilha
     opacityExponent: f32, //correção de opacidade: N_referência / N_fatias
 };
-@group(0) @binding(0) var<uniform> frame: Frame;
-//Slot de instância do bufferzão do pass — o layout é CONTRATO do
-//TransparentSlicesRenderPass e vale pra todo material dele: este shader
-//não usa a normalMatrix (não faz shading), mas precisa declarar o slot
-//inteiro senão lê o buffer com stride errado.
+//Slot de instância do bufferzão do pass (contrato do
+//TransparentSlicesRenderPass): a model E a normal matrix — matriz não
+//atravessa @location, então o fragment busca a normal matrix AQUI, com
+//o índice da instância chegando flat do vertex.
 struct ObjectData {
     model: mat4x4f,
-    normalMatrix: mat4x4f, //transpose(inverse(model)), usada pelos materiais com shading
+    //transpose(inverse(model)): leva normais/gradientes do espaço local
+    //pro mundo respeitando a escala não-uniforme do nó-pilha
+    normalMatrix: mat4x4f,
 };
+@group(0) @binding(0) var<uniform> frame: Frame;
 @group(1) @binding(0) var<storage, read> objects: array<ObjectData>;
 @group(2) @binding(0) var<uniform> material: MaterialParams;
 @group(2) @binding(1) var volSampler: sampler;
 @group(2) @binding(2) var volume: texture_3d<f32>;
 @group(2) @binding(3) var ctf: texture_2d<f32>; //LUT 512×1 da transfer function
+@group(2) @binding(4) var gradient: texture_3d<f32>; //novo
 
 struct VsOut {
     @builtin(position) position: vec4f,
     @location(0) uvw: vec3f,
+    @location(1) worldPos: vec3f,
+    //flat: mesmo valor nos 3 vértices, nenhuma interpolação — é só o
+    //jeito de entregar o índice pro fragment indexar objects[]
+    @location(2) @interpolate(flat) instance: u32,
 };
 
 @vertex
@@ -70,18 +81,44 @@ fn vs(
     @builtin(instance_index) instance: u32,
 ) -> VsOut {
     var out: VsOut;
-    out.position = frame.proj * frame.view * objects[instance].model * vec4f(position, 1.0);
+    let world = objects[instance].model * vec4f(position, 1.0);
+    out.position = frame.proj * frame.view * world;
     out.uvw = uvw;
+    out.worldPos = world.xyz;
+    out.instance = instance;
     return out;
 }
 
 @fragment
 fn fs(in: VsOut) -> @location(0) vec4f {
+    let lightPos = vec3f(5.0, 5.0, 5.0); //hardcoded por hora
     let hu = textureSample(volume, volSampler, in.uvw).r;
     //HU normalizado indexa a LUT; fora do domínio o clamp-to-edge do
     //sampler estende as pontas da curva (ver ctf.ts)
     let u = (hu - material.ctfMin) / (material.ctfMax - material.ctfMin);
     let c = textureSample(ctf, volSampler, vec2f(u, 0.5));
+    //a textura guarda dir*0.5+0.5 (rgba8 não tem sinal) — decodifica de
+    //volta pra [-1,1]; o .a é a magnitude normalizada (ver gradientCompute)
+    let dHU = textureSample(gradient, volSampler, in.uvw);
+    let g = dHU.xyz * 2.0 - 1.0;
+    //blinn-phong, SÓ onde há gradiente: em região homogênea (a≈0) a
+    //direção decodificada é ruído perto de zero e normalize explodiria —
+    //lá fica a cor da CTF pura (equivale a só ambiente)
+    var rgb = c.rgb;
+    if (dHU.a > 0.01) {
+        //normal aponta CONTRA o gradiente: do denso pro menos denso,
+        //ou seja pra FORA da estrutura (osso → ar)
+        let N = normalize((objects[in.instance].normalMatrix * vec4f(-g, 0.0)).xyz);
+        let L = normalize(lightPos - in.worldPos);
+        let V = normalize(frame.cameraPos.xyz - in.worldPos);
+        let H = normalize(L + V);
+        let diffuse = max(dot(N, L), 0.0);
+        //especular pesado pela magnitude: brilho só em borda de verdade,
+        //não em ruído de tecido mole
+        let specular = pow(max(dot(N, H), 0.0), 32.0) * dHU.a;
+        let ambient = 0.2; //pro lado oposto à luz não ir a preto absoluto
+        rgb = c.rgb * (ambient + (1.0 - ambient) * diffuse) + vec3f(0.3 * specular);
+    }
     //CORREÇÃO DE OPACIDADE: o alpha da CTF (× alphaScale) é definido pra
     //pilha de REFERÊNCIA; com N fatias cada slab fica N_ref/N vezes mais
     //fino, e a opacidade equivalente do slab fino é 1-(1-a)^(N_ref/N).
@@ -89,11 +126,11 @@ fn fs(in: VsOut) -> @location(0) vec4f {
     //com isto ele muda só a qualidade do sampling, o acúmulo é invariante.
     let aRef = c.a * material.alphaScale;
     let alpha = 1.0 - pow(1.0 - aRef, material.opacityExponent);
-    return vec4f(c.rgb, alpha);
+    return vec4f(rgb, alpha);
 }
 `;
 
-export class TextureStackTransparentMaterial extends Material {
+export class TextureStackPrecalculatedMaterial extends Material {
     //---- nível do TIPO: static, compartilhado por todas as instâncias ----
     private static shaderModule: GPUShaderModule | null = null;
     private static materialLayout: GPUBindGroupLayout | null = null;
@@ -103,7 +140,7 @@ export class TextureStackTransparentMaterial extends Material {
     private static getMaterialBindGroupLayout(device: GPUDevice): GPUBindGroupLayout {
         if (!this.materialLayout) {
             this.materialLayout = device.createBindGroupLayout({
-                label: "TextureStackTransparentMaterial material",
+                label: "TextureStackPrecalculatedMaterial material",
                 entries: [
                     { binding: 0, visibility: GPUShaderStage.FRAGMENT, buffer: { type: "uniform" } },
                     { binding: 1, visibility: GPUShaderStage.FRAGMENT, sampler: {} },
@@ -117,6 +154,11 @@ export class TextureStackTransparentMaterial extends Material {
                         visibility: GPUShaderStage.FRAGMENT,
                         texture: { sampleType: "float", viewDimension: "2d" },
                     },
+                    { //novo
+                        binding: 4,
+                        visibility: GPUShaderStage.FRAGMENT,
+                        texture: { sampleType:"float", viewDimension: "3d"},
+                    } 
                 ],
             });
         }
@@ -145,14 +187,14 @@ export class TextureStackTransparentMaterial extends Material {
         const { device } = ctx;
         if (!this.shaderModule) {
             this.shaderModule = device.createShaderModule({
-                label: "TextureStackTransparentMaterial shader",
+                label: "TextureStackPrecalculatedMaterial shader",
                 code: SLICES_WGSL,
             });
         }
         return device.createRenderPipeline({
-            label: "TextureStackTransparentMaterial (VolumeSlice)",
+            label: "TextureStackPrecalculatedMaterial (VolumeSlice)",
             layout: device.createPipelineLayout({
-                label: "TextureStackTransparentMaterial pipeline layout",
+                label: "TextureStackPrecalculatedMaterial pipeline layout",
                 bindGroupLayouts: [
                     ctx.frameBindGroupLayout,
                     ctx.objectBindGroupLayout,
@@ -194,6 +236,7 @@ export class TextureStackTransparentMaterial extends Material {
     private readonly device: GPUDevice;
     private readonly volumeTexture: GPUTexture;
     private readonly lutTexture: GPUTexture;
+    private readonly gradientTexture: GPUTexture;
     private readonly paramsBuffer: GPUBuffer;
     private readonly bindGroup: GPUBindGroup;
     //domínio corrente da LUT — guardados pra os setters reescreverem o
@@ -207,6 +250,7 @@ export class TextureStackTransparentMaterial extends Material {
     constructor(
         device: GPUDevice,
         volumeTexture: GPUTexture,
+        gradientTexture: GPUTexture,
         /** Pontos de controle da CTF, ordenados por HU (ver ctf.ts). */
         ctfPoints: readonly CtfPoint[],
         //densidade por fatia DE REFERÊNCIA — knob separado do sliceCount
@@ -216,6 +260,7 @@ export class TextureStackTransparentMaterial extends Material {
         super();
         this.device = device;
         this.volumeTexture = volumeTexture;
+        this.gradientTexture = gradientTexture;
         this.alphaScale = alphaScale;
 
         this.paramsBuffer = device.createBuffer({
@@ -233,12 +278,13 @@ export class TextureStackTransparentMaterial extends Material {
 
         this.bindGroup = device.createBindGroup({
             label: "TextureStackTransparentMaterial instance",
-            layout: TextureStackTransparentMaterial.getMaterialBindGroupLayout(device),
+            layout: TextureStackPrecalculatedMaterial.getMaterialBindGroupLayout(device),
             entries: [
                 { binding: 0, resource: { buffer: this.paramsBuffer } },
-                { binding: 1, resource: TextureStackTransparentMaterial.getSampler(device) },
+                { binding: 1, resource: TextureStackPrecalculatedMaterial.getSampler(device) },
                 { binding: 2, resource: this.volumeTexture.createView({ dimension: "3d" }) },
                 { binding: 3, resource: this.lutTexture.createView() },
+                { binding: 4, resource: this.gradientTexture.createView() },
             ],
         });
     }
@@ -300,11 +346,11 @@ export class TextureStackTransparentMaterial extends Material {
                 `TextureStackTransparentMaterial só desenha MeshType.VolumeSlice, recebeu ${MeshType[meshType]}.`,
             );
         }
-        if (!TextureStackTransparentMaterial.pipeline) {
-            TextureStackTransparentMaterial.pipeline =
-                TextureStackTransparentMaterial.createPipeline(ctx);
+        if (!TextureStackPrecalculatedMaterial.pipeline) {
+            TextureStackPrecalculatedMaterial.pipeline =
+                TextureStackPrecalculatedMaterial.createPipeline(ctx);
         }
-        return TextureStackTransparentMaterial.pipeline;
+        return TextureStackPrecalculatedMaterial.pipeline;
     }
 
     override getBindGroup(): GPUBindGroup {
@@ -316,5 +362,6 @@ export class TextureStackTransparentMaterial extends Material {
         this.volumeTexture.destroy();
         this.lutTexture.destroy();
         this.paramsBuffer.destroy();
+        this.gradientTexture.destroy();
     }
 }

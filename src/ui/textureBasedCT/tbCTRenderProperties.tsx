@@ -2,7 +2,7 @@
 //despacha a intenção pro redux; quem consome é a SetNumSlicesBehaviour
 //pendurada no nó-pilha, que repassa pro TextureSliceGenerator.
 import { useDispatch, useSelector } from "react-redux";
-import { setTextureBasedCTNumSlices } from "../../redux/actions";
+import { setAlphaScale, setTextureBasedCTNumSlices } from "../../redux/actions";
 import type { RootState } from "../../redux/reducers";
 import type { AppDispatch } from "../../redux/store";
 import type { World } from "../../world";
@@ -14,6 +14,7 @@ import { Slider } from "../generic/Slider";
 export default function TbCTRenderProperties({ world: _world }: { world: World }) {
     const dispatch = useDispatch<AppDispatch>();
     const numSlices = useSelector((state: RootState) => state.textureBasedCT.numSlices);
+    const alphaScale = useSelector((state: RootState) => state.textureBasedCT.alphaScale);
     return (
         <FloatingPanel title="Render (CT)" width={260} height="auto" style={{ top: 8, left: 8 }}>
             {/*label em volta do slider: clicar no texto foca o input*/}
@@ -27,6 +28,17 @@ export default function TbCTRenderProperties({ world: _world }: { world: World }
                     max={512}
                     value={numSlices}
                     onChange={(value) => dispatch(setTextureBasedCTNumSlices(value))}
+                    />
+                <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 4 }}>
+                    <span>Alpha Scale</span>
+                    <span>{alphaScale}</span>
+                </div>
+                <Slider
+                    min={0.1}
+                    max={1.0}
+                    step={0.1}
+                    value={alphaScale}
+                    onChange={(value)=>dispatch(setAlphaScale(value))}
                 />
             </label>
         </FloatingPanel>

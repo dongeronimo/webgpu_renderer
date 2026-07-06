@@ -53,9 +53,9 @@
 
 ## Where we'll pay the price?
 - Slice stacks pay the price on the blender fixed function
-- Raymarchers pay on the fragment or compute shader.
+- Raymarchers and splatters pay on the fragment or compute shader.
+- Fourier are lighting fast but can't do occlusion.
 - Preprocessing pay on the CPU, on the memory transfer to the GPU (if the data was processed in the CPU) or in the compute shader (if the data was processed in the GPU).
--pyy
 
 ## Issues we need to take care of
 - Sampling artifacts
@@ -64,21 +64,29 @@
   - some ways to "cheat" like ray jitter, to disguise the pattern
 - Differences between hardware
   - in some platforms some operations are cheap, in other they are expensive. 
-  - Example: texture fetch in desktop x mobile
+  - Example: texture fetch cost in desktop x mobile
 
 ---
 # Techniques
 ##  Real Time Volume Rendering Techniques
-
 - How do we do the real time volume rendering? 
 - The best techquinque vary with the evolution of the hardware, the user requirements and the dataset.
 - GPUs don't understand volume, they understand meshes (vertex shader, fragment shaders, etc). So we use workarounds using meshes to trigger the volumetric render algorithm or to fake volume.
 
+## Image composition
+- Volume data: may be the actual colour or may be data that is used to generate the colour.
+- To see deep into the volume we need to somehow integrate the samples along a direction to do the illusion of
+  volume in a 3d mesh.   
+
 ## Texture stack (Texture-based slicing):
 - the 3d texture is "sliced" by many planes, rendered with blending on
-- Old technique, was used in the 90s and early 2000s when the GPUs were weak and fixed function
+- Uses the blender fixed function step to integrate the ray.
+- Older technique, still relevant because it's fast.
+- Shadows and other image improvements are much harder in it then in raymarchers
+- Can't do some optimizations that come naturally to raymarching
+  - early ray termination
+  - empty space skipping
 - Bottleneck at the blending step and lots of fragments discarded.
-- Was the only way to offload work to GPU in the past.
 
 ## Texture Stack (Texture-based slicing) cont.
 - [TODO image of the stacks]

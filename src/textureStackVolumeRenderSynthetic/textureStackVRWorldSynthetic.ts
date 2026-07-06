@@ -36,7 +36,7 @@ export class TextureStackVolumeRendererSynthetic extends World {
     }
     /**
      * O volume é um fantoma sintético gerado na hora (HU de verdade:
-     * ar/tecido/osso), com window/level hardcoded no material.
+     * ar/tecido/osso), com uma CTF hardcoded no material.
      *
      * A cena: câmera olhando a origem + nó-pilha com o TextureSliceGenerator,
      * que cria os nós-fatia como filhos dele no primeiro update. O nó-pilha
@@ -58,11 +58,26 @@ export class TextureStackVolumeRendererSynthetic extends World {
         this.rootNode.addChild(camNode);
         camNode.lookAt(new Float32Array([0, 0, 0]));
 
-        //volume: textura 3D + material com window/level hardcoded
-        //(W400 L40, janela de tecido mole — defaults do material)
+        //volume: textura 3D + material com uma CTF HARDCODED pro fantoma
+        //(ar/tecido/osso). Este mundo não ouve o state ctf do redux de
+        //propósito: o papel dele é ser o caso mínimo da técnica — a curva
+        //editável é assunto do mundo CT.
         this.material = new TextureStackTransparentMaterial(
             this.device,
             createSyntheticVolume(this.device, 128),
+            [
+                //ar transparente; tecido mole avermelhado e rala; osso branco denso
+                { hu: -1000, r: 0.0, g: 0.0, b: 0.0, a: 0.0 },
+                { hu: -100, r: 0.8, g: 0.4, b: 0.3, a: 0.0 },
+                { hu: 40, r: 0.9, g: 0.55, b: 0.45, a: 0.2 },
+                { hu: 400, r: 0.95, g: 0.9, b: 0.8, a: 0.55 },
+                { hu: 1000, r: 1.0, g: 1.0, b: 1.0, a: 0.95 },
+            ],
+            //alphaScale baixo de propósito: as esferas do fantoma são
+            //ENORMES (centenas de slabs de travessia) — com o default 0.3,
+            //calibrado pra estruturas anatômicas finas, virariam um bloco
+            //opaco e o osso interno sumiria
+            0.05,
         );
 
         //nó-pilha: a caixa do volume é [-0.5, 0.5]³ no espaço local dele;

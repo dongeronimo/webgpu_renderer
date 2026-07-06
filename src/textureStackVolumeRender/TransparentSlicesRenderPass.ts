@@ -18,10 +18,17 @@
 //  grupo 0 (frame)  — uniform com view e proj da câmera, separadas
 //                     (sombra/iluminação vão precisar delas individualmente).
 //                     Dono: este pass.
-//  grupo 1 (objeto) — UM storage buffer com todas as model matrices do
-//                     frame, uma por slot na ordem de draw; cada draw acha
-//                     a sua passando o slot em firstInstance, que chega no
-//                     shader como @builtin(instance_index). Dono: este pass.
+//  grupo 1 (objeto) — UM storage buffer com os dados de instância do
+//                     frame, um ObjectData por slot na ordem de draw:
+//                     a MODEL matrix + a NORMAL matrix (transpose da
+//                     inversa da model — leva normais/gradientes pro
+//                     mundo sem entortar com a escala não-uniforme do
+//                     nó-pilha). Cada draw acha o seu slot passando-o em
+//                     firstInstance, que chega no shader como
+//                     @builtin(instance_index). Visível também no
+//                     FRAGMENT: matriz não passa por @location, então o
+//                     fragment lê a normal matrix direto daqui (com o
+//                     índice chegando flat do vertex). Dono: este pass.
 //  grupo 2 (material) — da instância de Material.
 import { mat4, type Mat4 } from "wgpu-matrix";
 import { Node } from "../node";
@@ -39,6 +46,9 @@ import {
 } from "../material";
 
 const FLOATS_PER_MAT4 = 16;
+//slot de instância no bufferzão: model + normalMatrix (struct ObjectData
+//nos shaders deste pass)
+const FLOATS_PER_OBJECT = 2 * FLOATS_PER_MAT4;
 
 interface DrawItem {
     renderable: Renderable;
@@ -51,10 +61,10 @@ export class TransparentSlicesRenderPass {
     private readonly device: GPUDevice;
     private readonly ctx: PipelineContext;
 
-    //grupo 0: view (64 bytes) + proj (64 bytes), no layout do struct Frame
+    //grupo 0: view (64 bytes) + proj (64 bytes) + cameraPos (16 bytes), no layout do struct Frame
     private readonly frameBuffer: GPUBuffer;
     private readonly frameBindGroup: GPUBindGroup;
-    private readonly frameData = new Float32Array(2 * FLOATS_PER_MAT4);
+    private readonly frameData = new Float32Array(2 * FLOATS_PER_MAT4 + 16 + 16);
 
     //grupo 1: o bufferzão de model matrices. Cresce quando o mundo cresce
     //(recriar buffer + bind group é barato se for raro); o conteúdo é
@@ -85,7 +95,13 @@ export class TransparentSlicesRenderPass {
         const frameBindGroupLayout = device.createBindGroupLayout({
             label: "transparent slices frame (grupo 0)",
             entries: [
-                { binding: 0, visibility: GPUShaderStage.VERTEX, buffer: { type: "uniform" } },
+                {
+                    binding: 0,
+                    //FRAGMENT também: o shading lê frame.cameraPos pro
+                    //vetor de view do especular
+                    visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT,
+                    buffer: { type: "uniform" },
+                },
             ],
         });
         const objectBindGroupLayout = device.createBindGroupLayout({
@@ -93,7 +109,9 @@ export class TransparentSlicesRenderPass {
             entries: [
                 {
                     binding: 0,
-                    visibility: GPUShaderStage.VERTEX,
+                    //FRAGMENT também: é lá que a normal matrix é usada
+                    //(matriz não atravessa @location — ver comentário no topo)
+                    visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT,
                     buffer: { type: "read-only-storage" },
                 },
             ],
@@ -170,6 +188,7 @@ export class TransparentSlicesRenderPass {
             const view = mat4.invert(cam.worldMatrix); //invert não muta a fonte
             this.frameData.set(view, 0);
             this.frameData.set(cam.camera!.getProjectionMatrix(), FLOATS_PER_MAT4);
+            this.frameData.set(cam.position, FLOATS_PER_MAT4 + FLOATS_PER_MAT4);
             this.device.queue.writeBuffer(this.frameBuffer, 0, this.frameData);
         } else if (items.length > 0) {
             console.warn("TransparentSlicesRenderPass: nenhum nó com camera no mundo — nada será desenhado.");
@@ -180,7 +199,15 @@ export class TransparentSlicesRenderPass {
             this.growObjectBuffer(items.length);
         }
         items.forEach((item, i) => {
-            this.modelData.set(item.world, i * FLOATS_PER_MAT4);
+            const base = i * FLOATS_PER_OBJECT;
+            this.modelData.set(item.world, base);
+            //normal matrix = transpose(inverse(model)): a INVERSA pura
+            //entortaria normais sob a escala não-uniforme do nó-pilha;
+            //a transposta da inversa é a que preserva perpendicularidade
+            this.modelData.set(
+                mat4.transpose(mat4.invert(item.world)),
+                base + FLOATS_PER_MAT4,
+            );
         });
         if (items.length > 0) {
             this.device.queue.writeBuffer(
@@ -188,7 +215,7 @@ export class TransparentSlicesRenderPass {
                 0,
                 this.modelData,
                 0,
-                items.length * FLOATS_PER_MAT4,
+                items.length * FLOATS_PER_OBJECT,
             );
         }
 
@@ -245,10 +272,10 @@ export class TransparentSlicesRenderPass {
         }
         this.objectBuffer?.destroy();
         this.objectCapacity = capacity;
-        this.modelData = new Float32Array(capacity * FLOATS_PER_MAT4);
+        this.modelData = new Float32Array(capacity * FLOATS_PER_OBJECT);
         this.objectBuffer = this.device.createBuffer({
-            label: "transparent slices model matrices",
-            size: capacity * FLOATS_PER_MAT4 * 4,
+            label: "transparent slices object data (model + normal matrix)",
+            size: capacity * FLOATS_PER_OBJECT * 4,
             usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
         });
         this.objectBindGroup = this.device.createBindGroup({
