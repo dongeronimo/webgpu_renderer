@@ -16,6 +16,8 @@ export const TEXTURE_BASED_CT_SET_NUM_SLICES = "TEXTURE_BASED_CT_SET_NUM_SLICES"
 export const CTF_SET_POINTS = "CTF_SET_POINTS";
 
 export const SET_ALPHA_SCALE = "SET_ALPHA_SCALE";
+
+export const SET_DEBUG_VIEW_ACTIVE = "SET_DEBUG_VIEW";
 /**
  * Os mundos da app, como union e não string solta — mesmo critério do
  * RenderPassBit: typo morre em compile time. Cresce junto com os mundos.
@@ -45,6 +47,12 @@ export interface SetAlphaScaleAction {
     type: typeof SET_ALPHA_SCALE;
     payload: number;
 }
+
+export interface SetDebugViewActive {
+    type: typeof SET_DEBUG_VIEW_ACTIVE;
+    payload: boolean;
+}
+
 export function helloClicked(): HelloClickedAction {
     return { type: HELLO_CLICKED };
 }
@@ -65,6 +73,10 @@ export function setAlphaScale(value:number): SetAlphaScaleAction {
     return {type: SET_ALPHA_SCALE, payload: value};
 }
 
+export function SetDebugViewActive(value:boolean): SetDebugViewActive {
+    return { type: SET_DEBUG_VIEW_ACTIVE, payload: value};
+}
+
 //União de todas as actions da app — cresce conforme a UI cresce. TODO
 //reducer é tipado com ela: no redux, todo reducer recebe TODA action e
 //ignora (default) as que não conhece.
@@ -73,4 +85,5 @@ export type AppAction =
     | SwitchWorldAction
     | SetTextureBasedCTNumSlicesAction
     | SetCtfPointsAction
-    | SetAlphaScaleAction;
+    | SetAlphaScaleAction
+    | SetDebugViewActive;

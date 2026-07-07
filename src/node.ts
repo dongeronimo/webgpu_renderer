@@ -128,6 +128,22 @@ export class Node {
     this._eulerInSync = true;
   }
 
+  // --- clonagem ---
+
+  /**
+   * Copia a transformação LOCAL de `src` para este nó (posição, escala,
+   * rotação), preservando o estado CRU de Euler — o `(500, -720)` contínuo
+   * que passar pelo setter de `rotation` perderia. Usada pela clonagem de
+   * prefab; não toca em pai/filhos nem em componentes (renderable/camera).
+   */
+  copyLocalFrom(src: Node): void {
+    vec3.copy(src.position, this.position);
+    vec3.copy(src.scale, this.scale);
+    quat.copy(src._rotation, this._rotation);
+    vec3.copy(src._euler, this._euler);
+    this._eulerInSync = src._eulerInSync;
+  }
+
   // --- hierarquia ---
 
   /** Pai deste nó, ou `null` se for um nó de raiz. */

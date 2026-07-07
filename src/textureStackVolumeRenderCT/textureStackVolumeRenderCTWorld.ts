@@ -34,13 +34,10 @@ export class TextureStackVolumeRendererCT extends World {
     //num quadzinho no canto, por cima do final (debugOverlayPass).
     private debugSlicesPass!: DebugSlicesPass;
     private debugOverlayPass!: DebugOverlayPass;
-    //liga/desliga a view de debug (quadzinho no canto). Sempre true por hora;
-    //vira knob de UI/redux depois. Off = pula os dois passes de debug.
-    private debugViewEnabled = true;
     //câmera principal, guardada pra passar ao debug pass (que a orbita)
     private camNode!: Node;
     //criados no createWorld; o mundo destrói os dois no destroy()
-    private material!: TextureStackPrecalculatedMaterial;
+    private materialWithGradient!: TextureStackPrecalculatedMaterial;
     private generator!: TextureSliceGenerator;
     private gradientTexture!: GPUTexture;
     /**
@@ -85,7 +82,7 @@ export class TextureStackVolumeRendererCT extends World {
         //a CTF vem do store, como o numSlices: se o usuário editou a curva
         //e trocou de mundo, o mundo recriado nasce com a curva editada
         //ordem do construtor: volume (HU) primeiro, gradiente depois
-        this.material = new TextureStackPrecalculatedMaterial(
+        this.materialWithGradient = new TextureStackPrecalculatedMaterial(
             this.device,
             texture,
             this.gradientTexture,
@@ -119,12 +116,12 @@ export class TextureStackVolumeRendererCT extends World {
         //usuário mexeu no slider e trocou de mundo, o mundo recriado nasce
         //já com o valor escolhido
         const numSlices = store.getState().textureBasedCT.numSlices;
-        this.material.setSliceCount(numSlices); //correção de opacidade já certa no 1º frame
-        this.generator = new TextureSliceGenerator(this.device, this.material, numSlices);
+        this.materialWithGradient.setSliceCount(numSlices); //correção de opacidade já certa no 1º frame
+        this.generator = new TextureSliceGenerator(this.device, this.materialWithGradient, numSlices);
         this.generator.node = stackNode;
         stackNode.behaviours.push(this.generator);
         //Cria o behaviour que ouve o alpha scale
-        const alphaScaleBehaviour = new SetAlphaScaleBehaviour(this.material);
+        const alphaScaleBehaviour = new SetAlphaScaleBehaviour(this.materialWithGradient);
         stackNode.behaviours.push(alphaScaleBehaviour);
         //rotação lenta pra dar paralaxe sem controle de câmera (por ora)
         const spin = new RotationBehaviour();
@@ -132,11 +129,11 @@ export class TextureStackVolumeRendererCT extends World {
         stackNode.behaviours.push(spin);
         //ouve o numSlices do redux e repassa pro generator (mesmo nó) e
         //pro material (correção de opacidade)
-        const numSlicesListener = new SetNumSlicesBehaviour(this.material);
+        const numSlicesListener = new SetNumSlicesBehaviour(this.materialWithGradient);
         numSlicesListener.node = stackNode;
         stackNode.behaviours.push(numSlicesListener);
         //ouve a tabela de CTF do redux e repassa pro material
-        const ctfListener = new SetCtfBehaviour(this.material);
+        const ctfListener = new SetCtfBehaviour(this.materialWithGradient);
         ctfListener.node = stackNode;
         stackNode.behaviours.push(ctfListener);
         this.rootNode.addChild(stackNode);
@@ -151,17 +148,22 @@ export class TextureStackVolumeRendererCT extends World {
         this.finalPass.resizeIfNeeded();
         const width = this.canvas.width;
         const height = this.canvas.height;
+        //liga/desliga a view de debug (quadzinho no canto) pelo redux — knob
+        //no painel Render (CT). Lido por frame de propósito: gateia PASSES de
+        //render, não é estado de nó, então não vira behaviour pendurada.
+        //Off = pula os dois passes de debug.
+        const debugViewEnabled = store.getState().textureBasedCT.debugViewActive;
         //fatias → alvo offscreen do slices pass (ele limpa e blenda)
         this.slicesPass.render(encoder, this.rootNode, width, height);
         //DEBUG: as MESMAS fatias, mas de uma câmera em órbita, pro alvo
         //offscreen próprio do debug pass (não toca no do slices)
-        if (this.debugViewEnabled) {
+        if (debugViewEnabled) {
             this.debugSlicesPass.render(encoder, this.rootNode, width, height, this.camNode);
         }
         //composição do offscreen do volume no backbuffer
         this.finalPass.render(encoder, this.slicesPass.colorView);
         //quadzinho de debug POR CIMA do backbuffer (loadOp "load")
-        if (this.debugViewEnabled) {
+        if (debugViewEnabled) {
             this.debugOverlayPass.render(encoder, this.debugSlicesPass.colorView);
         }
     }
@@ -169,7 +171,7 @@ export class TextureStackVolumeRendererCT extends World {
     override destroy(): void {
         super.destroy(); //materiais registrados (este mundo não usa o registry)
         this.generator.destroy(); //as SliceMesh são do generator
-        this.material.destroy(); //textura 3D + params (não registrado)
+        this.materialWithGradient.destroy(); //textura 3D + params (não registrado)
         this.slicesPass.destroy();
         this.debugSlicesPass.destroy();
         this.debugOverlayPass.destroy();

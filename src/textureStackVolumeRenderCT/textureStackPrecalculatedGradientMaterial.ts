@@ -10,11 +10,15 @@
 //A diferença dessa versão para o textureStackTransparentMaterial é que essa
 //versão usa um gradiente rgba8 pré calculado e faz shading phong.
 //
-//O fragment aplica a COLOR TRANSFER FUNCTION: o HU sampleado vira índice
-//numa LUT 512×1 rgba8 rasterizada na CPU a partir dos pontos de controle
-//(CtfPoint — ver ctf.ts, que explica domínio e clamp). setCtf() troca a
-//curva em runtime: reescreve a LUT e o domínio, sem tocar em pipeline —
-//é o que a SetCtfBehaviour chama quando o state ctf do redux muda.
+//O fragment aplica a CTF PRÉ-INTEGRADA (Engel): amostra o volume DUAS vezes
+//— na fatia (sf) e um slab adiante no raio (sb) — e indexa a tabela 2D
+//T[sf][sb] (rasterizada na CPU a partir dos pontos de controle, ver
+//bakePreIntegrationTable em ctf.ts), que já traz cor+opacidade integradas
+//na rampa sf→sb. É o que remove o onion-ring. setCtf() troca a curva em
+//runtime: rebakeia a tabela e o domínio, sem tocar em pipeline — é o que a
+//SetCtfBehaviour chama quando o state ctf do redux muda. (A tabela NÃO
+//depende do nº de fatias — ver ctf.ts —, então o slider de fatias não
+//rebakeia nada.)
 //
 //Dois knobs de densidade, independentes de propósito:
 //  - alphaScale: quanto UMA fatia (na pilha de REFERÊNCIA) contribui;
@@ -23,7 +27,7 @@
 //
 //Só aceita MeshType.VolumeSlice: o vertex layout (pos+uvw, 24 bytes) é o
 //da SliceMesh e não bate com o das meshes comuns.
-import { bakeCtfLut, CTF_LUT_WIDTH, type CtfPoint } from "../ctf";
+import { bakePreIntegrationTable, PREINT_TABLE_SIZE, type CtfPoint } from "../ctf";
 import { Material, type PipelineContext } from "../material";
 import { MeshType } from "../mesh";
 import { SliceMesh } from "../textureStackVolumeRender/sliceMesh";
@@ -42,10 +46,12 @@ struct Frame {
     cameraPos: vec4f,//novo
 };
 struct MaterialParams {
-    ctfMin: f32,     //HU do primeiro ponto da CTF (início da LUT)
-    ctfMax: f32,     //HU do último ponto (fim da LUT)
+    ctfMin: f32,     //HU do primeiro ponto da CTF (início do domínio)
+    ctfMax: f32,     //HU do último ponto (fim do domínio)
     alphaScale: f32, //dilui a opacidade da CTF pra UMA fatia da pilha
     opacityExponent: f32, //correção de opacidade: N_referência / N_fatias
+    sliceCount: f32, //nº de fatias AGORA — o fragment usa pra achar o passo
+                     //de profundidade até a amostra de trás do slab (sb)
 };
 //Slot de instância do bufferzão do pass (contrato do
 //TransparentSlicesRenderPass): a model E a normal matrix — matriz não
@@ -62,7 +68,7 @@ struct ObjectData {
 @group(2) @binding(0) var<uniform> material: MaterialParams;
 @group(2) @binding(1) var volSampler: sampler;
 @group(2) @binding(2) var volume: texture_3d<f32>;
-@group(2) @binding(3) var ctf: texture_2d<f32>; //LUT 512×1 da transfer function
+@group(2) @binding(3) var preint: texture_2d<f32>; //tabela 2D pré-integrada T[sf][sb]
 @group(2) @binding(4) var gradient: texture_3d<f32>; //novo
 
 struct VsOut {
@@ -92,11 +98,31 @@ fn vs(
 @fragment
 fn fs(in: VsOut) -> @location(0) vec4f {
     let lightPos = vec3f(5.0, 5.0, 5.0); //hardcoded por hora
-    let hu = textureSample(volume, volSampler, in.uvw).r;
-    //HU normalizado indexa a LUT; fora do domínio o clamp-to-edge do
-    //sampler estende as pontas da curva (ver ctf.ts)
-    let u = (hu - material.ctfMin) / (material.ctfMax - material.ctfMin);
-    let c = textureSample(ctf, volSampler, vec2f(u, 0.5));
+
+    //PRÉ-INTEGRAÇÃO (Engel): o slab é o segmento entre ESTA fatia (sf,
+    //frente) e a próxima, um passo adiante no raio de visão (sb, fundo).
+    //Offset em uvw: as fatias são perpendiculares ao forward da câmera f e
+    //igualmente espaçadas em PROFUNDIDADE DE MUNDO. A normal dos planos no
+    //espaço local (=uvw, pois uvw=pos+0.5) é n = Aᵀ·f; andar (passo/|n|²)·n
+    //avança t = n·x por exatamente um slab. (Mesma conta do
+    //TextureSliceGenerator.) f vem da view: −(coluna 2 da rotação).
+    let f = -vec3f(frame.view[0][2], frame.view[1][2], frame.view[2][2]);
+    let A0 = objects[in.instance].model[0].xyz; //colunas de A (parte linear
+    let A1 = objects[in.instance].model[1].xyz; //do model): Aᵀ·f = dot por
+    let A2 = objects[in.instance].model[2].xyz; //coluna
+    let nLocal = vec3f(dot(A0, f), dot(A1, f), dot(A2, f));
+    let nLen2 = max(dot(nLocal, nLocal), 1e-8);
+    //passo = (tMax-tMin)/N; a caixa é [-0.5,0.5]³, logo tMax-tMin = |n|₁
+    let stepDepth = (abs(nLocal.x) + abs(nLocal.y) + abs(nLocal.z)) / material.sliceCount;
+    let uvwBack = in.uvw + (stepDepth / nLen2) * nLocal; //+n = mais fundo
+
+    let sf = textureSample(volume, volSampler, in.uvw).r;   //frente (esta fatia)
+    let sb = textureSample(volume, volSampler, uvwBack).r;  //fundo (um slab adiante)
+    //sf/sb normalizados endereçam a tabela 2D; clamp-to-edge do sampler
+    //estende as pontas do domínio (ver ctf.ts). x=sf, y=sb.
+    let uf = (sf - material.ctfMin) / (material.ctfMax - material.ctfMin);
+    let ub = (sb - material.ctfMin) / (material.ctfMax - material.ctfMin);
+    let c = textureSample(preint, volSampler, vec2f(uf, ub));
     //a textura guarda dir*0.5+0.5 (rgba8 não tem sinal) — decodifica de
     //volta pra [-1,1]; o .a é a magnitude normalizada (ver gradientCompute)
     let dHU = textureSample(gradient, volSampler, in.uvw);
@@ -235,7 +261,7 @@ export class TextureStackPrecalculatedMaterial extends Material {
     //---- nível da INSTÂNCIA: volume + CTF + parâmetros desta instância ----
     private readonly device: GPUDevice;
     private readonly volumeTexture: GPUTexture;
-    private readonly lutTexture: GPUTexture;
+    private readonly preintTexture: GPUTexture;
     private readonly gradientTexture: GPUTexture;
     private readonly paramsBuffer: GPUBuffer;
     private readonly bindGroup: GPUBindGroup;
@@ -265,12 +291,12 @@ export class TextureStackPrecalculatedMaterial extends Material {
 
         this.paramsBuffer = device.createBuffer({
             label: "TextureStackTransparentMaterial params",
-            size: 16, //4 floats, o mínimo alinhado de um uniform
+            size: 32, //5 floats; uniform arredonda o tamanho da struct pra 16
             usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
         });
-        this.lutTexture = device.createTexture({
-            label: "TextureStackTransparentMaterial ctf lut",
-            size: [CTF_LUT_WIDTH, 1, 1],
+        this.preintTexture = device.createTexture({
+            label: "TextureStackPrecalculatedMaterial preintegration table",
+            size: [PREINT_TABLE_SIZE, PREINT_TABLE_SIZE, 1],
             format: "rgba8unorm",
             usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST,
         });
@@ -283,26 +309,28 @@ export class TextureStackPrecalculatedMaterial extends Material {
                 { binding: 0, resource: { buffer: this.paramsBuffer } },
                 { binding: 1, resource: TextureStackPrecalculatedMaterial.getSampler(device) },
                 { binding: 2, resource: this.volumeTexture.createView({ dimension: "3d" }) },
-                { binding: 3, resource: this.lutTexture.createView() },
+                { binding: 3, resource: this.preintTexture.createView() },
                 { binding: 4, resource: this.gradientTexture.createView() },
             ],
         });
     }
 
     /**
-     * Troca a curva em runtime: rasteriza os pontos na LUT e atualiza o
-     * domínio no uniform. Barato (512 texels na CPU + um writeTexture) —
-     * pode ser chamado a cada mudança do editor sem cerimônia.
+     * Troca a curva em runtime: rebakeia a TABELA 2D pré-integrada e
+     * atualiza o domínio no uniform. Mais caro que a LUT 1D (O(size²·
+     * substeps) na CPU + um writeTexture de size²), mas a curva muda em
+     * baixa frequência (intenção do redux) e o slider de fatias NÃO passa
+     * por aqui — a tabela independe de N.
      */
     setCtf(points: readonly CtfPoint[]): void {
-        const baked = bakeCtfLut(points);
+        const baked = bakePreIntegrationTable(points);
         this.ctfMin = baked.huMin;
         this.ctfMax = baked.huMax;
         this.device.queue.writeTexture(
-            { texture: this.lutTexture },
+            { texture: this.preintTexture },
             baked.data,
-            { bytesPerRow: CTF_LUT_WIDTH * 4 },
-            [CTF_LUT_WIDTH, 1, 1],
+            { bytesPerRow: baked.size * 4, rowsPerImage: baked.size },
+            [baked.size, baked.size, 1],
         );
         this.writeParams();
     }
@@ -336,6 +364,7 @@ export class TextureStackPrecalculatedMaterial extends Material {
                 this.ctfMax,
                 this.alphaScale,
                 REFERENCE_SLICE_COUNT / this.sliceCount,
+                this.sliceCount, //o fragment usa pra achar o passo até sb
             ]),
         );
     }
@@ -357,10 +386,10 @@ export class TextureStackPrecalculatedMaterial extends Material {
         return this.bindGroup;
     }
 
-    /** Libera a textura 3D, a LUT e o buffer de parâmetros desta instância. */
+    /** Libera a textura 3D, a tabela pré-integrada e o buffer de params. */
     override destroy(): void {
         this.volumeTexture.destroy();
-        this.lutTexture.destroy();
+        this.preintTexture.destroy();
         this.paramsBuffer.destroy();
         this.gradientTexture.destroy();
     }

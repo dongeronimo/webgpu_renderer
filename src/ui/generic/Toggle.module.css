@@ -1,0 +1,56 @@
+/* Aparência única do Toggle — mesma paleta do Button/Slider (primary
+   #2b6cb0, hover #3182ce, foco #7ab8ff). Interruptor = <input
+   type=checkbox> com appearance:none: o próprio host vira o trilho e o
+   ::before vira o knob que desliza no :checked. */
+
+.toggle {
+    appearance: none;
+    -webkit-appearance: none;
+    /* o host É o trilho */
+    position: relative;
+    width: 32px;
+    height: 18px;
+    /* não deixa o flex do pai esticar/encolher o interruptor */
+    flex: none;
+    margin: 0;
+    border-radius: 9px;
+    background: rgba(255, 255, 255, 0.25);
+    cursor: pointer;
+    transition: background-color 80ms ease;
+}
+
+.toggle:checked {
+    background: #2b6cb0;
+}
+
+.toggle:hover:not(:disabled):checked {
+    background: #3182ce;
+}
+
+.toggle:disabled {
+    opacity: 0.45;
+    cursor: default;
+}
+
+.toggle:focus-visible {
+    outline: 2px solid #7ab8ff;
+    outline-offset: 2px;
+}
+
+/* knob: 14px num trilho de 18px = 2px de folga em cima/embaixo */
+.toggle::before {
+    content: "";
+    position: absolute;
+    top: 2px;
+    left: 2px;
+    width: 14px;
+    height: 14px;
+    border-radius: 50%;
+    background: #fff;
+    transition: transform 80ms ease;
+}
+
+/* desliga → liga: desliza de ponta a ponta (32 - 14 - 2 - 2 = 14px) */
+.toggle:checked::before {
+    transform: translateX(14px);
+}

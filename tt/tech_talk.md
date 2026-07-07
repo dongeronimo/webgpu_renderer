@@ -66,6 +66,14 @@
   - in some platforms some operations are cheap, in other they are expensive. 
   - Example: texture fetch cost in desktop x mobile
 
+## Pre-integration (Engel, Kraus, Ertl 2001)
+- The principled fix for the onion ring: thin transfer-function features that fall BETWEEN two samples are simply skipped by a pointwise lookup.
+- Key move: a "slab" is the ray segment between two consecutive samples — use the PAIR (front value sf, back value sb), not a single point.
+- Precompute a 2D table T[sf][sb] = the transfer function INTEGRATED over the linear ramp sf→sb, baked from the CTF (not per frame). The diagonal sf==sb is just the old pointwise lookup.
+- Render time: sample the volume twice (this slice + one step deeper), and ONE 2D lookup replaces the pointwise CTF lookup — already integrated, nothing to composite in-slab.
+- Payoff: few slices look as crisp as many. Cost: +1 texture fetch and rebaking the table only when the CTF changes.
+  - TODO: imagem comparativa — poucas fatias, com e sem pré-integração
+
 ---
 # Techniques
 ##  Real Time Volume Rendering Techniques

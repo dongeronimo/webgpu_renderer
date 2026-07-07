@@ -2,7 +2,7 @@
 //switch e spread — sem toolkit, sem immer.
 import { combineReducers } from "redux";
 import type { CtfPoint } from "../ctf";
-import { CTF_SET_POINTS, HELLO_CLICKED, SET_ALPHA_SCALE, SWITCH_WORLD, TEXTURE_BASED_CT_SET_NUM_SLICES, type AppAction, type WorldName } from "./actions";
+import { CTF_SET_POINTS, HELLO_CLICKED, SET_ALPHA_SCALE, SET_DEBUG_VIEW_ACTIVE, SWITCH_WORLD, TEXTURE_BASED_CT_SET_NUM_SLICES, type AppAction, type WorldName } from "./actions";
 
 export interface HelloState {
     /** Quantas vezes o botão de hello foi clicado. */
@@ -24,6 +24,8 @@ export interface TextureBasedCTState {
     numSlices:number;
     //Qual é a alpha scale (taxa de acumulo da alpha, controla o quão rápido fica opaco)
     alphaScale: number;
+    //A debug view de slices está ativa?
+    debugViewActive: boolean;
 }
 
 /**
@@ -46,7 +48,8 @@ const baseInitial: BaseState = {
 
 const textureBasedCTInitial: TextureBasedCTState = {
     numSlices: 128,
-    alphaScale: 0.3
+    alphaScale: 0.3,
+    debugViewActive: true,
 }
 
 //CTF inicial calibrada pro exame de public/volumes: abdômen em fase venosa
@@ -100,6 +103,8 @@ function textureBasedCTReducer(state:TextureBasedCTState = textureBasedCTInitial
             return { ...state, numSlices: action.payload};
         case SET_ALPHA_SCALE:
             return { ...state, alphaScale: action.payload};
+        case SET_DEBUG_VIEW_ACTIVE:
+            return { ...state, debugViewActive: action.payload};
         default:
             return state;
     }

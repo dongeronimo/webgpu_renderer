@@ -1,9 +1,50 @@
   //Sem este import, "Node" abaixo resolveria pro Node do DOM (lib.dom)!
-  import type { Node } from "./node";
+  //Import de VALOR (não type-only) porque o clone default usa `instanceof Node`.
+  import { Node } from "./node";
 
   export abstract class Behaviour {
       node!: Node; //preenchido ao anexar
       abstract update(deltaTime: number): void;
+
+      /**
+       * Chamado UMA vez após a instância de prefab estar montada e
+       * parenteada (todos os nós criados, refs de nó já remapeadas). É o
+       * lugar pra resolver referências e alocar estado por-instância — o
+       * análogo do Awake/Start da Unity. No-op por default (só o caminho de
+       * prefab chama isto; o World.update segue só invocando update()).
+       */
+      start(): void {}
+
+      /**
+       * Libera estado por-instância desta behaviour (ex.: buffers de GPU que
+       * ela mesma criou). Chamado pelo destroyInstance ao tirar a instância
+       * de cena. No-op por default: a maioria das behaviours não tem estado
+       * de GPU próprio.
+       */
+      dispose(): void {}
+
+      /**
+       * Clona esta behaviour para uma instância de prefab. `map` leva cada
+       * Node do template ao seu clone — use-o pra remapear referências
+       * cruzadas de nó (target, etc.) pro nó correspondente da CÓPIA.
+       *
+       * Default: reconstrói via ctor SEM argumentos e copia os campos
+       * próprios, trocando os que forem Node pelo clone (ref a um nó FORA do
+       * prefab fica como está). Sobrescreva quando a behaviour tiver ctor com
+       * argumentos, estado não-clonável (handles de GPU), ou refs de nó
+       * dentro de arrays/objetos, que a cópia rasa não alcança.
+       */
+      clone(map: Map<Node, Node>): Behaviour {
+          const copy = new (this.constructor as new () => Behaviour)();
+          const src = this as unknown as Record<string, unknown>;
+          const dst = copy as unknown as Record<string, unknown>;
+          for (const key of Object.keys(this)) {
+              if (key === "node") continue; //religado pelo cloner
+              const value = src[key];
+              dst[key] = value instanceof Node ? (map.get(value) ?? value) : value;
+          }
+          return copy;
+      }
   }
 
   type BehaviourCtor = new () => Behaviour;
