@@ -105,7 +105,7 @@ export class StarshipDemoWorld extends World {
         //near tem que ser MENOR que a meia-aresta do cubo do skybox (~0.5): ele
         //fica preso na câmera, e um near maior o clipa inteiro por near-plane.
         camera.near = 0.1;
-        camera.far = 1000;  //a nave fica a ~113 da câmera; o far:100 do main cortaria
+        camera.far = 2000;  //a nave fica a ~113 da câmera; o far:100 do main cortaria
         cameraNode.camera = camera;
         //garante que todos tem referência ao world
         this.getAllNodes()
