@@ -7,5 +7,6 @@ import { WorldName } from "../../redux/actions";
 export const worldLabels: Record<WorldName, string> = {
     solarSystem: "Sistema Solar",
     textureStackVolumeRenderSynthetic: "Texture-based slicing (sintético)",
-    textureStackVolumeRenderCT: "Texture-based slicing (CT)"
+    textureStackVolumeRenderCT: "Texture-based slicing (CT)",
+    StarshipDemo : "Starship (demo)",
 };

@@ -2,6 +2,7 @@ import { mat4, quat, vec3, type Mat4, type Quat, type Vec3 } from "wgpu-matrix";
 import type { Renderable } from "./renderable";
 import type { Camera } from "./camera";
 import type { Behaviour } from "./behaviour";
+import { Light } from "./Light";
 
 const DEG_TO_RAD = Math.PI / 180;
 const RAD_TO_DEG = 180 / Math.PI;
@@ -57,6 +58,10 @@ export class Node {
    */
   public camera: Camera | null = null;
 
+  /**
+   * O nó tem luz? Por enquanto só pode uma luz por nó.
+   */
+  public light: Light | null = null;
   /** Custom properties do Blender (extras do glTF), como vieram do arquivo. */
   public extras: Record<string, unknown> = {};
 

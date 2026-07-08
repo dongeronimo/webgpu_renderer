@@ -22,7 +22,8 @@ export const SET_DEBUG_VIEW_ACTIVE = "SET_DEBUG_VIEW";
  * Os mundos da app, como union e não string solta — mesmo critério do
  * RenderPassBit: typo morre em compile time. Cresce junto com os mundos.
  */
-export type WorldName = "solarSystem" | "textureStackVolumeRenderSynthetic" | "textureStackVolumeRenderCT";
+export type WorldName = "solarSystem" | "textureStackVolumeRenderSynthetic" | 
+"textureStackVolumeRenderCT" | "StarshipDemo";
 
 export interface HelloClickedAction {
     type: typeof HELLO_CLICKED;

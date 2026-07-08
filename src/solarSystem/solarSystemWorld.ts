@@ -71,7 +71,7 @@ export class SolarSystem extends World {
         });
 
         //O cubo do skybox: entra na árvore do mundo como filho da MESMA root
-        //(ROOT continua sendo a única raiz), mas com o passMask trocado —
+        //(ROOT continua sendo a única raiz), mas com o passMask trocado -
         //sai do main pass, entra só no skybox pass, que o acha na árvore.
         const cube = await loadGltf(this.device, "/models/unitary_cube.glb");
         this.meshes.push(...cube.meshes);

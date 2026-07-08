@@ -15,6 +15,7 @@ import { store } from "./redux/store";
 import { World } from "./world";
 import { SolarSystem } from "./solarSystem/solarSystemWorld";
 import { TextureStackVolumeRendererCT } from "./textureStackVolumeRenderCT/textureStackVolumeRenderCTWorld";
+import { StarshipDemoWorld } from "./StarshipDemo/StarshipDemoWorld";
 const status = document.getElementById("status")!;
 // Todas as behaviours que o sistema for usar tem que ser registradas aqui devido
 // a falta de reflection de verdade depois da minificaçaõ, que caga os nomes das
@@ -83,24 +84,30 @@ async function main() {
       try{
          switch(chosenWorld) {
            case "solarSystem":
-             const solarSystem = new SolarSystem(device);
-             solarSystem.createRenderPasses(canvas, canvasFormat);
-             await solarSystem.createWorld(
-               {aspect:canvas.width/canvas.height, fovy:45, near:0.1, far:100});
-             currentWorld = solarSystem;
+              const solarSystem = new SolarSystem(device);
+              solarSystem.createRenderPasses(canvas, canvasFormat);
+              await solarSystem.createWorld(
+                {aspect:canvas.width/canvas.height, fovy:45, near:0.1, far:100});
+              currentWorld = solarSystem;
            break;
            case "textureStackVolumeRenderSynthetic":
-             const textureVRSynthWorld = new TextureStackVolumeRendererSynthetic(device);
-             textureVRSynthWorld.createRenderPasses(canvas,  canvasFormat);
-             await textureVRSynthWorld.createWorld({aspect:canvas.width/canvas.height, fovy:45, near:0.1, far:100});
-             currentWorld = textureVRSynthWorld;
-             break;
+              const textureVRSynthWorld = new TextureStackVolumeRendererSynthetic(device);
+              textureVRSynthWorld.createRenderPasses(canvas,  canvasFormat);
+              await textureVRSynthWorld.createWorld({aspect:canvas.width/canvas.height, fovy:45, near:0.1, far:100});
+              currentWorld = textureVRSynthWorld;
+              break;
            case "textureStackVolumeRenderCT":
-             const textureVRCTWorld = new TextureStackVolumeRendererCT(device);
-             textureVRCTWorld.createRenderPasses(canvas,  canvasFormat);
-             await textureVRCTWorld.createWorld({aspect:canvas.width/canvas.height, fovy:45, near:0.1, far:100});
-             currentWorld = textureVRCTWorld;
-             break;
+              const textureVRCTWorld = new TextureStackVolumeRendererCT(device);
+              textureVRCTWorld.createRenderPasses(canvas,  canvasFormat);
+              await textureVRCTWorld.createWorld({aspect:canvas.width/canvas.height, fovy:45, near:0.1, far:100});
+              currentWorld = textureVRCTWorld;
+              break;
+            case "StarshipDemo":
+              const starshipWorld = new StarshipDemoWorld(device);
+              starshipWorld.createRenderPasses(canvas,  canvasFormat);
+              await starshipWorld.createWorld({aspect:canvas.width/canvas.height, fovy:45, near:0.1, far:100});
+              currentWorld = starshipWorld;
+              break;
          }
          setUiWorld(currentWorld);
       }catch(e){
