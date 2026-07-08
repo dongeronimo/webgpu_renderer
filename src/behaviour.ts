@@ -5,13 +5,25 @@
   export abstract class Behaviour {
       node!: Node; //preenchido ao anexar
       abstract update(deltaTime: number): void;
-
+      private alreadyCalledStart:boolean = false;
       /**
-       * Chamado UMA vez após a instância de prefab estar montada e
-       * parenteada (todos os nós criados, refs de nó já remapeadas). É o
-       * lugar pra resolver referências e alocar estado por-instância — o
-       * análogo do Awake/Start da Unity. No-op por default (só o caminho de
-       * prefab chama isto; o World.update segue só invocando update()).
+       * Dispara start() uma única vez (idempotente via `alreadyCalledStart`).
+       * É o portão único do start: tanto o clone de prefab (no instantiate)
+       * quanto o World.update (no 1º frame) chamam por aqui, então start()
+       * roda exatamente uma vez, independente de quem chegar primeiro.
+       */
+      callStartIfHaventYet(){
+        if(!this.alreadyCalledStart){
+            this.start();
+            this.alreadyCalledStart = true;
+        }
+      }
+      /**
+       * Chamado UMA vez, antes do primeiro update, com a árvore montada e as
+       * refs de nó já remapeadas. É o lugar pra resolver referências e alocar
+       * estado por-instância — o análogo do Awake/Start da Unity. No-op por
+       * default. Não chame direto: use callStartIfHaventYet() pra garantir a
+       * chamada única.
        */
       start(): void {}
 

@@ -3,6 +3,7 @@ import type { Renderable } from "./renderable";
 import type { Camera } from "./camera";
 import type { Behaviour } from "./behaviour";
 import { Light } from "./Light";
+import { World } from "./world";
 
 const DEG_TO_RAD = Math.PI / 180;
 const RAD_TO_DEG = 180 / Math.PI;
@@ -49,6 +50,7 @@ const EULER_ORDER = "yxz";
 export class Node {
   public name:String = "foobar";
 
+  public world:World|null = null;
   /** O que este nó desenha, se desenhar algo. `null` = nó puramente de transform. */
   public renderable: Renderable | null = null;
 
@@ -197,6 +199,17 @@ export class Node {
     if (child._parent === this) {
       child.setParent(null);
     }
+  }
+
+  /**
+   * Anexa uma behaviour a este nó, religando o back-reference `behaviour.node`
+   * pra cá. Use SEMPRE isto em vez de `behaviours.push` cru: o push sozinho
+   * deixa `behaviour.node` indefinido e a behaviour estoura no primeiro acesso
+   * a `this.node`.
+   */
+  addBehaviour(behaviour: Behaviour): void {
+    behaviour.node = this;
+    this.behaviours.push(behaviour);
   }
 
   /**

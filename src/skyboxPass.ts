@@ -52,7 +52,12 @@ fn fs(in: VsOut) -> @location(0) vec4f {
     return textureSample(cubemap, texSampler, normalize(in.dir));
 }
 `;
-
+/**
+ * OBS.:
+ * O skybox pass, da forma como feita no exemplo do SolarSystem, assume que zNear é 0.1. Naquele exemplo em que
+ * fazemos o 1o skybox a gente usa zNear = 0.1 e o cubo unitário (sides 1x1x1). Se o zNear for maior ou mto proximo
+ * a 1 a Skybox não vai desenhar pq estará fora do zNear.
+ */
 export class SkyboxRenderPass {
     private readonly device: GPUDevice;
     private readonly pipeline: GPURenderPipeline;

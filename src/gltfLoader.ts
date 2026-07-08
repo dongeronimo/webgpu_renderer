@@ -92,9 +92,10 @@ export async function loadGltf(device: GPUDevice, url: string): Promise<GltfLoad
     let materialName: string | null = null;
     for (const [key, value] of Object.entries(node.extras)) {
       const k = key.toLowerCase();
-      //"MaterialName" (qualquer caixa): nome do material deste nó,
-      //resolvido via registry na hora de criar os renderables abaixo
-      if (k === "materialname") {
+      //"MaterialName" ou "Material" (qualquer caixa): nome do material deste
+      //nó, resolvido via registry na hora de criar os renderables abaixo.
+      //"Material" é o nome natural que o Blender dá à custom property.
+      if (k === "materialname" || k === "material") {
         if (typeof value === "string") {
           materialName = value;
         } else {

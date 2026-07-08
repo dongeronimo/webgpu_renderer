@@ -48,7 +48,7 @@ fn vs(
 }
 
 @fragment
-fn fs(in:VsOut) -> @location(0) vec4f {
+fn fs(in:VsOut, @builtin(front_facing) frontFacing: bool) -> @location(0) vec4f {
     let light0Intensity = vec3f(1.0, 1.0, 1.0); //TODO fazer isso ser propriedade do frame
     //potência calibrada pra escala da StarshipDemo (nave ~60u, luz a ~120u):
     //com atenuação linear power/distance isso dá ~2 no centro. TODO virar
@@ -56,7 +56,14 @@ fn fs(in:VsOut) -> @location(0) vec4f {
     let light0Power = 250.0;
 
     //a interpolação entre vértices desnormaliza — renormaliza por fragmento
-    let N = normalize(in.worldNormal);
+    var N = normalize(in.worldNormal);
+    //double-sided: no lado de trás a normal (autorada pra fora) aponta pro lado
+    //ERRADO em relação a quem observa. Sem inverter, essas faces caem em
+    //NdotL<=0, viram só ambiente, escurecem e somem contra o espaço — parece
+    //buraco. Inverte a normal na face de trás pra iluminar o lado visível.
+    if (!frontFacing) {
+        N = -N;
+    }
 
     //vetor até a luz + atenuação. length dá a distância; reaproveito pra normalizar
     var lightDir = frame.light0Pos.xyz - in.worldPosition;
@@ -93,7 +100,7 @@ fn fs(in:VsOut) -> @location(0) vec4f {
 //funciona nesse pass — não no MeshRenderPass comum.
 //------------------------------------------------------------------------
 
-export class PhongColorMaterial extends Material {
+export class DoubleSidedPhongMaterial extends Material {
     //---- nível do TIPO: static, compartilhado por todas as instâncias ----
     private static shaderModule: GPUShaderModule | null = null;
     private static materialLayout: GPUBindGroupLayout | null = null;
@@ -149,7 +156,7 @@ export class PhongColorMaterial extends Material {
                 targets: [{ format: ctx.colorFormat }],
             },
             //glTF define triângulos CCW como frente; o frontFace default ("ccw") bate.
-            primitive: { topology: "triangle-list", cullMode: "back" },
+            primitive: { topology: "triangle-list", cullMode: "none" },
             depthStencil: {
                 format: ctx.depthFormat,
                 depthWriteEnabled: true,
@@ -167,7 +174,7 @@ export class PhongColorMaterial extends Material {
     private readonly device: GPUDevice;
     private readonly paramsBuffer: GPUBuffer;
     private readonly bindGroup: GPUBindGroup;
-    private readonly params = new Float32Array(PhongColorMaterial.FLOATS);
+    private readonly params = new Float32Array(DoubleSidedPhongMaterial.FLOATS);
 
     constructor(
         device: GPUDevice,
@@ -179,12 +186,12 @@ export class PhongColorMaterial extends Material {
         this.device = device;
         this.paramsBuffer = device.createBuffer({
             label: "PhongColorMaterial params",
-            size: PhongColorMaterial.FLOATS * 4, //32 bytes (múltiplo de 16, ok pra uniform)
+            size: DoubleSidedPhongMaterial.FLOATS * 4, //32 bytes (múltiplo de 16, ok pra uniform)
             usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
         });
         this.bindGroup = device.createBindGroup({
             label: "PhongColorMaterial instance",
-            layout: PhongColorMaterial.getMaterialBindGroupLayout(device),
+            layout: DoubleSidedPhongMaterial.getMaterialBindGroupLayout(device),
             entries: [{ binding: 0, resource: { buffer: this.paramsBuffer } }],
         });
         this.params.set(color, 0);
@@ -221,10 +228,10 @@ export class PhongColorMaterial extends Material {
     }
 
     override getPipeline(ctx: PipelineContext, meshType: MeshType): GPURenderPipeline {
-        let pipeline = PhongColorMaterial.pipelines.get(meshType);
+        let pipeline = DoubleSidedPhongMaterial.pipelines.get(meshType);
         if (!pipeline) {
-            pipeline = PhongColorMaterial.createPipeline(ctx, meshType);
-            PhongColorMaterial.pipelines.set(meshType, pipeline);
+            pipeline = DoubleSidedPhongMaterial.createPipeline(ctx, meshType);
+            DoubleSidedPhongMaterial.pipelines.set(meshType, pipeline);
         }
         return pipeline;
     }

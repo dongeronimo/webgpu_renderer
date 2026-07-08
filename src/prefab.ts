@@ -19,6 +19,7 @@ import { Node } from "./node";
 import { Renderable } from "./renderable";
 import { Camera } from "./camera";
 import type { GltfLoadResult } from "./gltfLoader";
+import type { World } from "./world";
 
 export class Prefab {
     private constructor(
@@ -49,9 +50,16 @@ export class Prefab {
         return new Prefab(holder, name);
     }
 
-    /** Uma cópia fresca e destacada. O chamador a parenteia onde quiser. */
-    instantiate(): Node {
-        return cloneSubtree(this.template);
+    /**
+     * Uma cópia fresca e destacada. O chamador a parenteia onde quiser.
+     *
+     * `world` é injetado em `.world` de cada nó da cópia ANTES do start(),
+     * pra que uma behaviour possa usar `this.node.world` já no start (ex.: a
+     * ShipLifecycle agenda a própria destruição). Passe o World que vai
+     * receber a instância; `null` deixa `.world` nulo (nó fora de mundo).
+     */
+    instantiate(world: World | null = null): Node {
+        return cloneSubtree(this.template, world);
     }
 }
 
@@ -61,10 +69,10 @@ export class Prefab {
  * resto é copiado. As referências de nó guardadas nas behaviours são
  * remapeadas pros nós da cópia.
  */
-export function cloneSubtree(src: Node): Node {
+export function cloneSubtree(src: Node, world: World | null = null): Node {
     const map = new Map<Node, Node>();
-    //Passe 1: estrutura + componentes. Preenche o map original→clone.
-    const root = cloneStructure(src, map);
+    //Passe 1: estrutura + componentes (+ .world). Preenche o map original→clone.
+    const root = cloneStructure(src, map, world);
     //Passe 2: behaviours. Só agora o map está COMPLETO, então uma behaviour
     //pode remapear uma referência a QUALQUER nó do prefab com segurança.
     for (const [orig, clone] of map) {
@@ -74,18 +82,22 @@ export function cloneSubtree(src: Node): Node {
             clone.behaviours.push(copy);
         }
     }
-    //Passe 3: start() — árvore montada, refs resolvidas.
+    //Passe 3: start() — árvore montada, refs resolvidas. Via
+    //callStartIfHaventYet (não start() direto) pra marcar o flag: assim o
+    //callStartIfHaventYet do World.update, no primeiro frame da instância,
+    //vira no-op em vez de disparar um SEGUNDO start.
     for (const clone of map.values()) {
         for (const behaviour of clone.behaviours) {
-            behaviour.start();
+            behaviour.callStartIfHaventYet();
         }
     }
     return root;
 }
 
-function cloneStructure(src: Node, map: Map<Node, Node>): Node {
+function cloneStructure(src: Node, map: Map<Node, Node>, world: World | null): Node {
     const node = new Node();
     node.name = src.name;
+    node.world = world; //injetado (não copiado do template): a instância é deste mundo
     node.copyLocalFrom(src);
     node.extras = structuredClone(src.extras);
     if (src.renderable) {
@@ -96,7 +108,7 @@ function cloneStructure(src: Node, map: Map<Node, Node>): Node {
     }
     map.set(src, node);
     for (const child of src.children) {
-        cloneStructure(child, map).setParent(node);
+        cloneStructure(child, map, world).setParent(node);
     }
     return node;
 }
