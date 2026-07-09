@@ -17,7 +17,11 @@ export enum RenderPassBit {
   Skybox = 1 << 1,
   /** Fatias translúcidas compostas por blend de hardware (VR clássico). */
   TransparentSlices = 1 << 2,
-  //futuro: Shadow = 1 << 3, Reflection = 1 << 4, Volume = 1 << 5...
+  /** Meshes skinnadas: desenhadas pelo SkinnedRenderPass, que tem o buffer
+   *  de matrizes de osso. Uma mesh skinnada NÃO pode entrar no main pass
+   *  (o grupo de objeto é outro), então leva este bit em vez de Main. */
+  Skinned = 1 << 3,
+  //futuro: Shadow = 1 << 4, Reflection = 1 << 5, Volume = 1 << 6...
 }
 
 export class Renderable {

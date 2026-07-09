@@ -4,6 +4,7 @@ import type { Camera } from "./camera";
 import type { Behaviour } from "./behaviour";
 import { Light } from "./Light";
 import { World } from "./world";
+import type { Skin } from "./skin";
 
 const DEG_TO_RAD = Math.PI / 180;
 const RAD_TO_DEG = 180 / Math.PI;
@@ -64,6 +65,13 @@ export class Node {
    * O nó tem luz? Por enquanto só pode uma luz por nó.
    */
   public light: Light | null = null;
+
+  /**
+   * Esqueleto, se este nó desenha uma mesh skinnada. `null` = mesh rígida ou
+   * sem skin. Referencia os Nodes dos ossos (vivos na cena) — a clonagem de
+   * prefab remapeia essas referências pros ossos da cópia (ver prefab.ts).
+   */
+  public skin: Skin | null = null;
   /** Custom properties do Blender (extras do glTF), como vieram do arquivo. */
   public extras: Record<string, unknown> = {};
 

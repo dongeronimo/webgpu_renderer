@@ -73,9 +73,16 @@ export function cloneSubtree(src: Node, world: World | null = null): Node {
     const map = new Map<Node, Node>();
     //Passe 1: estrutura + componentes (+ .world). Preenche o map original→clone.
     const root = cloneStructure(src, map, world);
-    //Passe 2: behaviours. Só agora o map está COMPLETO, então uma behaviour
-    //pode remapear uma referência a QUALQUER nó do prefab com segurança.
+    //Passe 2: referências entre nós. Só agora o map está COMPLETO, então dá
+    //pra remapear qualquer referência a nó do prefab com segurança.
     for (const [orig, clone] of map) {
+        //Skin: os ossos são Nodes; a cópia tem que apontar pros ossos da
+        //CÓPIA, não do template (senão duas instâncias dividem esqueleto e a
+        //segunda "puxa" a pose da primeira). As inverseBindMatrices, sendo
+        //constantes do asset, continuam compartilhadas.
+        if (orig.skin) {
+            clone.skin = orig.skin.clone(map);
+        }
         for (const behaviour of orig.behaviours) {
             const copy = behaviour.clone(map);
             copy.node = clone;

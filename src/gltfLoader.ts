@@ -15,16 +15,18 @@
 //  - NORMAL/TEXCOORD_0 ausentes são preenchidos com zeros (com aviso).
 //  - Índices são convertidos para uint32; primitive sem índices ganha a
 //    sequência 0..n-1 para o caminho de draw ser sempre indexado.
-//
-//TODO: skins de verdade (esqueleto, inverseBindMatrices) quando existir
-//o sistema de animação — por enquanto só os ids/pesos entram no vértice.
+//  - Skin (esqueleto + inverseBindMatrices): vira um Skin nosso, resolvido
+//    numa segunda passada (precisa do mapa glTF-node→Node completo pra achar
+//    os Nodes dos ossos) e anexado ao nó que desenha a mesh skinnada.
 import { WebIO, Primitive } from "@gltf-transform/core";
 import { ALL_EXTENSIONS } from "@gltf-transform/extensions";
-import type { Node as GltfNode, Primitive as GltfPrimitive } from "@gltf-transform/core";
+import type { Node as GltfNode, Primitive as GltfPrimitive, Skin as GltfSkin } from "@gltf-transform/core";
 import { quat, vec3 } from "wgpu-matrix";
 import { Node } from "./node";
 import { Renderable } from "./renderable";
-import { Mesh, StaticMesh, SkinnedMesh } from "./mesh";
+import { Mesh, MeshType, StaticMesh, SkinnedMesh } from "./mesh";
+import { Skin } from "./skin";
+import { AnimationClip, type AnimationChannel, type AnimInterp, type AnimPath } from "./animation";
 import { createBehaviour } from "./behaviour";
 import { getMaterial } from "./material";
 
@@ -35,6 +37,11 @@ export interface GltfLoadResult {
   nodes: Node[];
   /** Meshes únicas do arquivo, já com os buffers na GPU. */
   meshes: Mesh[];
+  /** Skins únicas do arquivo, já com os Nodes dos ossos resolvidos. */
+  skins: Skin[];
+  /** Clips de animação do arquivo (canais por NOME de osso, sem ref a Node).
+   *  Arquivos só-de-animação do Mixamo (sem mesh) entram aqui. */
+  animations: AnimationClip[];
 }
 
 export async function loadGltf(device: GPUDevice, url: string): Promise<GltfLoadResult> {
@@ -55,6 +62,13 @@ export async function loadGltf(device: GPUDevice, url: string): Promise<GltfLoad
   const meshes: Mesh[] = [];
   //Cache primitive → Mesh: instâncias compartilhadas não sobem duas vezes.
   const meshCache = new Map<GltfPrimitive, Mesh | null>();
+  //glTF-node → Node nosso: preenchido na conversão, consumido depois pra
+  //resolver os ossos das skins (que são referências a nós).
+  const nodeMap = new Map<GltfNode, Node>();
+  //Nós que desenham mesh skinnada, com a skin do arquivo que os deforma.
+  //Coletado na conversão, resolvido na segunda passada (quando o nodeMap já
+  //tem todos os ossos). Um mesh com N primitives gera N nós — todos entram.
+  const pendingSkins: { node: Node; gltfSkin: GltfSkin }[] = [];
 
   function getMesh(prim: GltfPrimitive, fallbackName: string): Mesh | null {
     let mesh = meshCache.get(prim);
@@ -75,6 +89,7 @@ export async function loadGltf(device: GPUDevice, url: string): Promise<GltfLoad
       node.name = name;
     }
     nodes.push(node);
+    nodeMap.set(src, node);
 
     const t = src.getTranslation();
     const r = src.getRotation();
@@ -141,6 +156,10 @@ export async function loadGltf(device: GPUDevice, url: string): Promise<GltfLoad
     };
 
     const gltfMesh = src.getMesh();
+    //Skin do nó (esqueleto que deforma a mesh dele). Anexada na 2ª passada,
+    //mas o vínculo nó↔skin é decidido aqui: todo nó gerado por esta mesh
+    //(o principal e os _primN) compartilha a mesma skin.
+    const gltfSkin = src.getSkin();
     if (gltfMesh) {
       const meshName = gltfMesh.getName() || String(node.name);
       gltfMesh.listPrimitives().forEach((prim, i) => {
@@ -148,8 +167,15 @@ export async function loadGltf(device: GPUDevice, url: string): Promise<GltfLoad
         if (!mesh) {
           return; //primitive não suportada, já avisada no console
         }
+        //Só faz sentido anexar skin a quem tem os ids/pesos no vértice.
+        const target = (renderableNode: Node) => {
+          if (gltfSkin && mesh.type === MeshType.Skinned) {
+            pendingSkins.push({ node: renderableNode, gltfSkin });
+          }
+        };
         if (i === 0) {
           node.renderable = makeRenderable(mesh);
+          target(node);
         } else {
           //Renderable é um por nó: primitives extras viram filhos.
           const extra = new Node();
@@ -157,6 +183,7 @@ export async function loadGltf(device: GPUDevice, url: string): Promise<GltfLoad
           extra.renderable = makeRenderable(mesh);
           extra.setParent(node);
           nodes.push(extra);
+          target(extra);
         }
       });
     }
@@ -168,7 +195,90 @@ export async function loadGltf(device: GPUDevice, url: string): Promise<GltfLoad
   }
 
   const roots = scene.listChildren().map(convertNode);
-  return { roots, nodes, meshes };
+
+  //---- 2ª passada: skins ----
+  //Agora o nodeMap tem TODOS os nós (inclusive os ossos), então dá pra
+  //resolver os esqueletos. Uma Skin por glTF-skin (cacheada): meshes que
+  //compartilham o mesmo skin apontam pro mesmo objeto.
+  const skinCache = new Map<GltfSkin, Skin>();
+  const buildSkin = (gltfSkin: GltfSkin): Skin => {
+    let skin = skinCache.get(gltfSkin);
+    if (skin) {
+      return skin;
+    }
+    //Os ossos, na ordem do arquivo — é essa ordem que o índice de junta do
+    //vértice endereça (JOINTS_0 guarda índices NESTE array, não índices de nó).
+    const bones = gltfSkin.listJoints().map((joint) => {
+      const node = nodeMap.get(joint);
+      if (!node) {
+        //Junta fora da cena convertida: não deveria acontecer com glTF válido.
+        throw new Error(`glTF: junta "${joint.getName()}" do skin não está na cena.`);
+      }
+      return node;
+    });
+    //inverseBindMatrices: accessor de MAT4 float32 (16 floats por osso),
+    //column-major como o WebGPU. getArray() devolve a view crua; copio pra
+    //um Float32Array próprio, que a Skin passa a possuir.
+    const ibmAccessor = gltfSkin.getInverseBindMatrices();
+    const ibm = ibmAccessor
+      ? new Float32Array(ibmAccessor.getArray() as Float32Array)
+      : //Sem inverseBindMatrices o glTF manda assumir identidade (bind = origem).
+        identityInverseBinds(bones.length);
+    skin = new Skin(bones, ibm);
+    skinCache.set(gltfSkin, skin);
+    return skin;
+  };
+  for (const { node, gltfSkin } of pendingSkins) {
+    node.skin = buildSkin(gltfSkin);
+  }
+
+  //---- 3ª passada: animações ----
+  //Cada clip é dado puro: canais endereçam o osso pelo NOME (não por Node),
+  //pra tocar em qualquer instância do mesmo esqueleto. Arquivos só-de-anim do
+  //Mixamo (sem mesh) caem aqui e retornam meshes/skins vazios.
+  const animations = root.listAnimations().map((anim) => {
+    const channels: AnimationChannel[] = [];
+    let duration = 0;
+    for (const ch of anim.listChannels()) {
+      const targetNode = ch.getTargetNode();
+      const sampler = ch.getSampler();
+      const rawPath = ch.getTargetPath();
+      //só T/R/S; "weights" (morph targets) não entra no skinning.
+      if (!targetNode || !sampler || (rawPath !== "translation" && rawPath !== "rotation" && rawPath !== "scale")) {
+        continue;
+      }
+      const input = sampler.getInput();
+      const output = sampler.getOutput();
+      if (!input || !output) {
+        continue;
+      }
+      const interp = (sampler.getInterpolation() ?? "LINEAR") as AnimInterp;
+      if (interp === "CUBICSPLINE") {
+        //applyChannel ainda não trata cubicspline (layout de valores é outro).
+        console.warn(`glTF: canal CUBICSPLINE de "${targetNode.getName()}" — tratado como LINEAR, pode ficar errado.`);
+      }
+      //Cópias próprias das keyframes (o clip passa a possuí-las).
+      const times = new Float32Array(input.getArray() as ArrayLike<number>);
+      const values = new Float32Array(output.getArray() as ArrayLike<number>);
+      channels.push({ boneName: targetNode.getName(), path: rawPath as AnimPath, interp, times, values });
+      duration = Math.max(duration, times[times.length - 1] ?? 0);
+    }
+    return new AnimationClip(anim.getName(), duration, channels);
+  });
+
+  return { roots, nodes, meshes, skins: [...skinCache.values()], animations };
+}
+
+//Fallback pro skin sem inverseBindMatrices: uma identidade por osso.
+function identityInverseBinds(count: number): Float32Array {
+  const data = new Float32Array(count * 16);
+  for (let j = 0; j < count; j++) {
+    data[j * 16 + 0] = 1;
+    data[j * 16 + 5] = 1;
+    data[j * 16 + 10] = 1;
+    data[j * 16 + 15] = 1;
+  }
+  return data;
 }
 
 //Intercala os atributos da primitive no formato das nossas meshes e cria
