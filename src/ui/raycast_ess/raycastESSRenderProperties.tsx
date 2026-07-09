@@ -3,7 +3,7 @@
 //a behaviour-cérebro (VolumeRaycastBehaviour) vai ler no update() — nesta
 //etapa ninguém consome ainda, é só UI + plumbing do redux.
 import { useDispatch, useSelector } from "react-redux";
-import { setAlphaScale, setRaycastFramebufferScale, setRaycastGradientMode, setRaycastGradientShading, type GradientMode } from "../../redux/actions";
+import { setAlphaScale, SetDebugViewActive, setRaycastEssDebugView, setRaycastFramebufferScale, setRaycastGradientMode, setRaycastGradientShading, type GradientMode } from "../../redux/actions";
 import type { RootState } from "../../redux/reducers";
 import type { AppDispatch } from "../../redux/store";
 import { FloatingPanel } from "../generic/FloatingPanel";
@@ -17,12 +17,13 @@ const GRADIENT_MODES: { value: GradientMode; label: string }[] = [
     { value: "on-the-fly", label: "on-the-fly" },
 ];
 
-export default function RaycastRenderProperties() {
+export default function RaycastESSRenderProperties() {
     const dispatch = useDispatch<AppDispatch>();
     const gradientEnabled = useSelector((state: RootState) => state.raycast.gradientEnabled);
     const gradientMode = useSelector((state: RootState) => state.raycast.gradientMode);
     const scaleFactor = useSelector((state:RootState) => state.raycast.framebufferScale);
     const alphaScale = useSelector((state: RootState) => state.textureBasedCT.alphaScale);
+    const debugView = useSelector((state: RootState) => state.raycast.essDebugView);
     return (
         <FloatingPanel title="Render (Raycaster)" width={260} height="auto" style={{ top: 8, left: 8 }}>
             {/*label próprio (flex row): texto à esquerda, interruptor à direita —
@@ -74,7 +75,14 @@ export default function RaycastRenderProperties() {
                     step={0.1}
                     value={alphaScale}
                     onChange={(value)=>dispatch(setAlphaScale(value))}
-                />                
+                /> 
+            <label style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                <span>Debug view</span>
+                <Toggle
+                    checked={debugView}
+                    onChange={(value) => dispatch(setRaycastEssDebugView(value))}
+                />
+            </label>               
         </FloatingPanel>
     );
 }

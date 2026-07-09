@@ -9,23 +9,38 @@
 //Ela só vale até o fim do frame — por isso pegamos uma nova a cada render().
 
 //Triângulo fullscreen clássico: 3 vértices gerados no próprio shader
-//(sem vertex buffer) cobrindo a tela inteira. Como o alvo do mesh pass
-//tem o mesmo tamanho do backbuffer, a leitura é 1:1 por textureLoad —
-//coordenada de pixel direto, sem sampler.
+//(sem vertex buffer) cobrindo a tela inteira. O alvo do mesh pass pode ser
+//MENOR que o backbuffer (framebufferScale do raycaster), então a composição
+//ESTICA a imagem sobre a tela: textureSample com uv normalizado [0,1] +
+//sampler linear (upscale bilinear). Quando os tamanhos coincidem, o uv cai
+//no centro do texel e a leitura vira 1:1 — sem regressão nos outros mundos.
 import { gpuTimer } from "./gpuTimer";
 
 const BLIT_WGSL = /* wgsl */ `
+struct VsOut {
+  @builtin(position) pos: vec4f,
+  @location(0) uv: vec2f,
+};
+
 @vertex
-fn vs(@builtin(vertex_index) i: u32) -> @builtin(position) vec4f {
-  let pos = array(vec2f(-1.0, -1.0), vec2f(3.0, -1.0), vec2f(-1.0, 3.0));
-  return vec4f(pos[i], 0.0, 1.0);
+fn vs(@builtin(vertex_index) i: u32) -> VsOut {
+  let positions = array(vec2f(-1.0, -1.0), vec2f(3.0, -1.0), vec2f(-1.0, 3.0));
+  let p = positions[i];
+  var out: VsOut;
+  out.pos = vec4f(p, 0.0, 1.0);
+  //clip [-1,1] → uv [0,1] com y invertido (a textura tem origem no topo).
+  //O vértice esticado leva o uv a 2; a área visível (clip [-1,1]) mapeia
+  //certinho pra [0,1] e o clamp-to-edge segura o resto.
+  out.uv = vec2f(p.x * 0.5 + 0.5, 0.5 - p.y * 0.5);
+  return out;
 }
 
 @group(0) @binding(0) var source: texture_2d<f32>;
+@group(0) @binding(1) var samp: sampler;
 
 @fragment
-fn fs(@builtin(position) p: vec4f) -> @location(0) vec4f {
-  return textureLoad(source, vec2i(p.xy), 0);
+fn fs(in: VsOut) -> @location(0) vec4f {
+  return textureSample(source, samp, in.uv);
 }
 `;
 
@@ -36,6 +51,8 @@ export class FinalRenderPass {
 
   private readonly pipeline: GPURenderPipeline;
   private readonly bindGroupLayout: GPUBindGroupLayout;
+  //linear + clamp: faz o upscale bilinear quando o alvo é menor que a tela
+  private readonly sampler: GPUSampler;
   //Bind group cacheado: só é recriado quando a textura de origem muda
   //(o mesh pass recria a dele no resize).
   private bindGroup: GPUBindGroup | null = null;
@@ -63,7 +80,15 @@ export class FinalRenderPass {
       label: "final pass source",
       entries: [
         { binding: 0, visibility: GPUShaderStage.FRAGMENT, texture: {} },
+        { binding: 1, visibility: GPUShaderStage.FRAGMENT, sampler: {} },
       ],
+    });
+    this.sampler = device.createSampler({
+      label: "final pass sampler",
+      magFilter: "linear",
+      minFilter: "linear",
+      addressModeU: "clamp-to-edge",
+      addressModeV: "clamp-to-edge",
     });
     const module = device.createShaderModule({ label: "final pass blit", code: BLIT_WGSL });
     this.pipeline = device.createRenderPipeline({
@@ -93,7 +118,10 @@ export class FinalRenderPass {
       this.bindGroup = this.device.createBindGroup({
         label: "final pass source",
         layout: this.bindGroupLayout,
-        entries: [{ binding: 0, resource: source }],
+        entries: [
+          { binding: 0, resource: source },
+          { binding: 1, resource: this.sampler },
+        ],
       });
       this.lastSource = source;
     }

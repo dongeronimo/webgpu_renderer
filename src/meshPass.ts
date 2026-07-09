@@ -153,7 +153,9 @@ export class MeshRenderPass {
         return this._depthView;
     }
 
-    render(encoder: GPUCommandEncoder, root: Node, width: number, height: number): void {
+    render(encoder: GPUCommandEncoder, root: Node, width: number, height: number,
+        clearColor:{r:number, g:number, b:number, a:number} = { r: 0.39, g: 0.58, b: 0.93, a: 1 }
+    ): void {
         this.ensureTargets(width, height);
 
         //---- 1. agrupamento ----
@@ -234,7 +236,7 @@ export class MeshRenderPass {
                 {
                     view: this._colorView!,
                     loadOp: this.colorLoadOp,
-                    clearValue: { r: 0.39, g: 0.58, b: 0.93, a: 1 }, //cornflower blue
+                    clearValue: clearColor, 
                     storeOp: "store",
                 },
             ],

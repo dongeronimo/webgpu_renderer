@@ -14,6 +14,10 @@ export const SWITCH_WORLD = "SWITCH_WORLD";
 export const TEXTURE_BASED_CT_SET_NUM_SLICES = "TEXTURE_BASED_CT_SET_NUM_SLICES";
 
 export const CTF_SET_POINTS = "CTF_SET_POINTS";
+//A faixa de HU do volume carregado (metadata) — o eixo X do editor de CTF. O
+//mundo despacha na carga; a UI lê pro domínio do gráfico. É metadata de carga
+//(baixa frequência), não estado por-frame, então cabe no redux.
+export const SET_CTF_HU_RANGE = "SET_CTF_HU_RANGE";
 
 export const SET_ALPHA_SCALE = "SET_ALPHA_SCALE";
 
@@ -24,15 +28,34 @@ export const SET_DEBUG_VIEW_ACTIVE = "SET_DEBUG_VIEW";
 export const ORBIT_CAMERA = "ORBIT_CAMERA";
 export const ZOOM_CAMERA = "ZOOM_CAMERA";
 
-//Raycaster: o toggle da UI liga/desliga o shading por gradiente on-the-fly;
-//a VolumeRaycastBehaviour lê e repassa pro material.
+//Raycaster: o toggle da UI liga/desliga o shading por gradiente; a
+//VolumeRaycastBehaviour lê e repassa pro material. ENABLE e MODE são
+//ortogonais: enable é o liga/desliga; mode escolhe COMO o gradiente é obtido
+//(pré-calculado numa textura 3D vs. calculado on-the-fly no shader). O mode
+//continua no state mesmo com o gradiente desligado — é a preferência que
+//volta a valer quando religa.
 export const SET_RAYCAST_GRADIENT_SHADING = "SET_RAYCAST_GRADIENT_SHADING";
+export const SET_RAYCAST_GRADIENT_MODE = "SET_RAYCAST_GRADIENT_MODE";
+//A primeira e mais brutal otimização de raycast é reduzir o framebuffer.
+//Menos fragmentos = menos raios.
+export const SET_RAYCAST_FRAMEBUFFER_SCALE = "SET_RAYCAST_FRAMEBUFFER_SCALE";
+//Empty-space skipping (mundo raycastESS): liga/desliga o skip de chunks vazios,
+//pra comparar velocidade com/sem. A VolumeRaycastESSBehaviour lê e repassa.
+export const SET_RAYCAST_ESS = "SET_RAYCAST_ESS";
+//PiP de debug do ESS: liga/desliga o quadzinho com os cubos dos chunks mantidos.
+//Gateia PASSES de render (lido no render() do world), não é estado de nó.
+export const SET_RAYCAST_ESS_DEBUG = "SET_RAYCAST_ESS_DEBUG";
+//Como o gradiente é obtido. "precalculated": uma textura 3D de gradientes
+//gerada uma vez (rápido no raymarch, custa VRAM e um pré-passo). "on-the-fly":
+//diferenças centrais amostradas no próprio shader a cada passo (zero memória
+//extra, mais amostras por passo). String union: typo morre em compile time.
+export type GradientMode = "precalculated" | "on-the-fly";
 /**
  * Os mundos da app, como union e não string solta — mesmo critério do
  * RenderPassBit: typo morre em compile time. Cresce junto com os mundos.
  */
 export type WorldName = "solarSystem" | "textureStackVolumeRenderSynthetic" |
-"textureStackVolumeRenderCT" | "StarshipDemo" | "raycast";
+"textureStackVolumeRenderCT" | "StarshipDemo" | "raycast" | "raycastESS";
 
 export interface HelloClickedAction {
     type: typeof HELLO_CLICKED;
@@ -51,6 +74,11 @@ export interface SetCtfPointsAction {
     type: typeof CTF_SET_POINTS;
     /** A tabela INTEIRA de pontos — o reducer a ordena por HU. */
     payload: CtfPoint[];
+}
+
+export interface SetCtfHuRangeAction {
+    type: typeof SET_CTF_HU_RANGE;
+    payload: { min: number; max: number };
 }
 
 export interface SetAlphaScaleAction {
@@ -80,6 +108,26 @@ export interface SetRaycastGradientShadingAction {
     payload: boolean;
 }
 
+export interface SetRaycastGradientModeAction {
+    type: typeof SET_RAYCAST_GRADIENT_MODE;
+    payload: GradientMode;
+}
+
+export interface SetRaycastFramebufferScaleAction {
+    type: typeof SET_RAYCAST_FRAMEBUFFER_SCALE;
+    payload: number;
+}
+
+export interface SetRaycastEssAction {
+    type: typeof SET_RAYCAST_ESS;
+    payload: boolean;
+}
+
+export interface SetRaycastEssDebugAction {
+    type: typeof SET_RAYCAST_ESS_DEBUG;
+    payload: boolean;
+}
+
 export function helloClicked(): HelloClickedAction {
     return { type: HELLO_CLICKED };
 }
@@ -94,6 +142,10 @@ export function setTextureBasedCTNumSlices(val:number):SetTextureBasedCTNumSlice
 
 export function setCtfPoints(points: CtfPoint[]): SetCtfPointsAction {
     return { type: CTF_SET_POINTS, payload: points };
+}
+
+export function setCtfHuRange(min: number, max: number): SetCtfHuRangeAction {
+    return { type: SET_CTF_HU_RANGE, payload: { min, max } };
 }
 
 export function setAlphaScale(value:number): SetAlphaScaleAction {
@@ -116,6 +168,22 @@ export function setRaycastGradientShading(enabled: boolean): SetRaycastGradientS
     return { type: SET_RAYCAST_GRADIENT_SHADING, payload: enabled };
 }
 
+export function setRaycastGradientMode(mode: GradientMode): SetRaycastGradientModeAction {
+    return { type: SET_RAYCAST_GRADIENT_MODE, payload: mode };
+}
+
+export function setRaycastFramebufferScale(val:number) : SetRaycastFramebufferScaleAction {
+    return {type: SET_RAYCAST_FRAMEBUFFER_SCALE, payload:val};
+}
+
+export function setRaycastEmptySpaceSkip(enabled: boolean): SetRaycastEssAction {
+    return { type: SET_RAYCAST_ESS, payload: enabled };
+}
+
+export function setRaycastEssDebugView(enabled: boolean): SetRaycastEssDebugAction {
+    return { type: SET_RAYCAST_ESS_DEBUG, payload: enabled };
+}
+
 //União de todas as actions da app — cresce conforme a UI cresce. TODO
 //reducer é tipado com ela: no redux, todo reducer recebe TODA action e
 //ignora (default) as que não conhece.
@@ -124,8 +192,13 @@ export type AppAction =
     | SwitchWorldAction
     | SetTextureBasedCTNumSlicesAction
     | SetCtfPointsAction
+    | SetCtfHuRangeAction
     | SetAlphaScaleAction
     | SetDebugViewActive
     | OrbitCameraAction
     | ZoomCameraAction
-    | SetRaycastGradientShadingAction;
+    | SetRaycastGradientShadingAction
+    | SetRaycastGradientModeAction
+    | SetRaycastFramebufferScaleAction
+    | SetRaycastEssAction
+    | SetRaycastEssDebugAction;

@@ -2,7 +2,7 @@
 //switch e spread — sem toolkit, sem immer.
 import { combineReducers } from "redux";
 import type { CtfPoint } from "../ctf";
-import { CTF_SET_POINTS, HELLO_CLICKED, ORBIT_CAMERA, SET_ALPHA_SCALE, SET_DEBUG_VIEW_ACTIVE, SWITCH_WORLD, TEXTURE_BASED_CT_SET_NUM_SLICES, ZOOM_CAMERA, type AppAction, type WorldName } from "./actions";
+import { CTF_SET_POINTS, HELLO_CLICKED, ORBIT_CAMERA, SET_ALPHA_SCALE, SET_CTF_HU_RANGE, SET_DEBUG_VIEW_ACTIVE, SET_RAYCAST_ESS, SET_RAYCAST_ESS_DEBUG, SET_RAYCAST_FRAMEBUFFER_SCALE, SET_RAYCAST_GRADIENT_MODE, SET_RAYCAST_GRADIENT_SHADING, SWITCH_WORLD, TEXTURE_BASED_CT_SET_NUM_SLICES, ZOOM_CAMERA, type AppAction, type GradientMode, type WorldName } from "./actions";
 
 export interface HelloState {
     /** Quantas vezes o botão de hello foi clicado. */
@@ -36,6 +36,29 @@ export interface TextureBasedCTState {
  */
 export interface CtfState {
     points: CtfPoint[];
+    //Faixa de HU do volume carregado (metadata) = eixo X do editor de CTF. O
+    //mundo despacha na carga; até lá vale o placeholder inicial.
+    huMin: number;
+    huMax: number;
+}
+
+/**
+ * Estado do raycaster. Por ora só o shading por gradiente: enabled é o
+ * liga/desliga; mode escolhe entre gradiente pré-calculado (textura 3D) e
+ * on-the-fly (diferenças centrais no shader). Ortogonais de propósito — o
+ * mode sobrevive ao desligar, então religar volta pro modo que o usuário
+ * tinha escolhido. Ainda ninguém CONSOME (a VolumeRaycastBehaviour vai ler);
+ * esta etapa é só UI + plumbing.
+ */
+export interface RaycastState {
+    gradientEnabled: boolean;
+    gradientMode: GradientMode;
+    framebufferScale: number;
+    //Empty-space skipping ligado? (mundo raycastESS; on por default pra o world
+    //já nascer usando o skip — o toggle serve pra comparar com/sem.)
+    essEnabled: boolean;
+    //PiP de debug do ESS (cubos dos chunks mantidos) visível?
+    essDebugView: boolean;
 }
 
 /**
@@ -85,6 +108,19 @@ const ctfInitial: CtfState = {
         //osso cortical: marfim, quase opaco
         { hu: 1000, r: 1.0, g: 0.98, b: 0.92, a: 0.95 },
     ],
+    //placeholder até um mundo despachar a faixa real do exame (metadata)
+    huMin: -1000,
+    huMax: 1500,
+};
+
+//Gradiente começa desligado; quando ligar, o default é on-the-fly (não custa
+//o pré-passo nem a VRAM da textura 3D).
+const raycastInitial: RaycastState = {
+    gradientEnabled: false,
+    gradientMode: "on-the-fly",
+    framebufferScale : 1.0,
+    essEnabled: true,
+    essDebugView: true,
 };
 
 //Pitch máximo (~89°): abaixo do polo, onde o up (0,1,0) do lookAt ficaria
@@ -152,6 +188,23 @@ function textureBasedCTReducer(state:TextureBasedCTState = textureBasedCTInitial
     }
 }
 
+function raycastReducer(state: RaycastState = raycastInitial, action: AppAction): RaycastState {
+    switch (action.type) {
+        case SET_RAYCAST_GRADIENT_SHADING:
+            return { ...state, gradientEnabled: action.payload };
+        case SET_RAYCAST_GRADIENT_MODE:
+            return { ...state, gradientMode: action.payload };
+        case SET_RAYCAST_FRAMEBUFFER_SCALE:
+            return { ...state, framebufferScale: action.payload };
+        case SET_RAYCAST_ESS:
+            return { ...state, essEnabled: action.payload };
+        case SET_RAYCAST_ESS_DEBUG:
+            return { ...state, essDebugView: action.payload };
+        default:
+            return state;
+    }
+}
+
 //Ordena AQUI, no único ponto de escrita — quem despacha não precisa saber
 //da invariante, e quem consome (SetCtfBehaviour → bakeCtfLut) confia nela.
 //Array novo a cada set: é a troca de REFERÊNCIA que a behaviour detecta.
@@ -159,6 +212,8 @@ function ctfReducer(state: CtfState = ctfInitial, action: AppAction): CtfState {
     switch (action.type) {
         case CTF_SET_POINTS:
             return { ...state, points: [...action.payload].sort((a, b) => a.hu - b.hu) };
+        case SET_CTF_HU_RANGE:
+            return { ...state, huMin: action.payload.min, huMax: action.payload.max };
         default:
             return state;
     }
@@ -170,6 +225,7 @@ export const rootReducer = combineReducers({
     textureBasedCT: textureBasedCTReducer,
     ctf: ctfReducer,
     camera: cameraReducer,
+    raycast: raycastReducer,
 });
 
 //O shape do state inteiro, derivado do rootReducer — é o tipo que os

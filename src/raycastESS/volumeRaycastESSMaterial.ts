@@ -1,39 +1,39 @@
-//Material do RAYCASTER de volume (single-pass, proxy-cube).
+//Material do RAYCASTER com EMPTY-SPACE SKIPPING. Clone do VolumeRaycastMaterial
+//(../raycast/) — MESMO raymarch single-pass proxy-cube, MESMA CTF pré-integrada
+//(Engel), MESMO shading por gradiente — mais o skip por chunk. É um material de
+//um WORLD NOVO de propósito: o raycaster baseline fica intacto pra comparar
+//qualidade/velocidade (A/B no gpuTimer).
 //
-//Diferente do VR por fatias (que desenha N quads translúcidos e deixa o
-//blend do hardware compor), aqui UM fragment por pixel marcha o raio dentro
-//da caixa e compõe o volume inteiro em software (front-to-back). O proxy é
-//o unitary_cube.glb ([-0.5,0.5]³ em local); renderamos as BACK-FACES
-//(cullMode "front") pra ter cobertura mesmo com a câmera dentro da caixa, e
-//reconstruímos a entrada/saída do raio por interseção analítica raio-caixa.
+//O que o ESS acrescenta (Design A — decisão na CPU, ver chunkOccupancy.ts):
+//  - binding 5: o SKIP-MAP, um storage buffer array<u32> (1/chunk: 1=processa,
+//    0=pula). Vem pronto da CPU; o material só o hospeda e o reescreve no
+//    setSkipMap() quando a CTF muda.
+//  - params ganha useSkip (liga/desliga o ESS pra A/B), chunkSize e numChunks
+//    (pro shader indexar o skip-map e calcular o salto ray-AABB do chunk).
 //
-//Reaproveita EXATAMENTE o sistema de CTF do textureStackVolumeRenderCT: a
-//tabela 2D pré-integrada do Engel (bakePreIntegrationTable), amostrada pelo
-//par (sf, sb) = HU na frente e no fundo de um passo. Shading por gradiente
-//OPCIONAL (toggle da UI), em dois modos — on-the-fly (diferenças centrais na
-//marcha) ou pré-calculado (textura 3D). Ainda SEM empty-space-skipping.
+//No laço: se o chunk atual é 0 no skip-map, o raio salta pra SAÍDA da caixa
+//daquele chunk (interseção ray-AABB, valor variável) em vez de amostrar — é o
+//que pula o ar que o baseline processava à toa.
 //
-//Bind groups (grupos 0 e 1 são do MeshRenderPass, lidos no fragment porque
-//o layout dele agora é VERTEX|FRAGMENT):
-//  grupo 0 (frame)    — view + proj; a câmera-mundo sai da view.
-//  grupo 1 (objeto)   — array de model matrices; a caixa usa a sua (invertida
-//                       leva o raio pro espaço local).
-//  grupo 2 (material) — params (domínio da CTF + alpha + passo + spacing +
-//                       flags de gradiente), sampler, volume 3D (HU r16float),
-//                       tabela pré-integrada 2D e o gradiente pré-calculado 3D.
-//
-//Só aceita MeshType.Static: o proxy é uma mesh comum (o cubo do glb).
+//Bind groups: iguais ao baseline nos grupos 0/1; grupo 2 (material) ganha o
+//binding 5. Só aceita MeshType.Static (o proxy-cube).
 import { bakePreIntegrationTable, PREINT_TABLE_SIZE, type CtfPoint } from "../ctf";
 import { Material, type PipelineContext } from "../material";
 import { MeshType, StaticMesh } from "../mesh";
 
-//Passo local de amostragem: 1/256 dá ~256 amostras num raio axial e ~443 na
-//diagonal da caixa (√3). MAX_STEPS cobre a diagonal com folga. Qualidade
-//sobre velocidade — o usuário pode adensar depois (a densidade não muda: a
-//correção de opacidade por passo compensa, ver o fragment).
 const DEFAULT_STEP_SIZE = 1 / 256;
 
-const RAYCAST_WGSL = /* wgsl */ `
+/** Grade de chunks + lado do chunk, tudo vindo do metadata do exame. */
+export interface ChunkGrid {
+    numChunksX: number;
+    numChunksY: number;
+    numChunksZ: number;
+    totalChunks: number;
+    /** Lado do chunk cúbico em VOXELS. */
+    chunkSize: number;
+}
+
+const RAYCAST_ESS_WGSL = /* wgsl */ `
 struct Frame {
     view: mat4x4f,
     proj: mat4x4f,
@@ -42,33 +42,36 @@ struct Frame {
 @group(1) @binding(0) var<storage, read> models: array<mat4x4f>;
 
 struct Params {
-    ctfMin: f32,      //HU do primeiro ponto da CTF (início do domínio)
-    ctfMax: f32,      //HU do último ponto (fim do domínio)
-    alphaScale: f32,  //dilui a opacidade da CTF por passo (knob da UI)
-    stepSize: f32,    //passo local ao longo do raio (espaço da caixa)
+    ctfMin: f32,       //HU do primeiro ponto da CTF (início do domínio)
+    ctfMax: f32,       //HU do último ponto (fim do domínio)
+    alphaScale: f32,   //dilui a opacidade da CTF por passo (knob da UI)
+    stepSize: f32,     //passo local ao longo do raio (espaço da caixa)
     //---
     useGradient: f32,  //>0.5 usa gradiente, else cor chapada
     gradientType: f32, //>0.5 = on-the-fly, else pré-calculado
+    useSkip: f32,      //>0.5 liga o empty-space skipping (else marcha tudo)
+    chunkSize: f32,    //lado do chunk em VOXELS
     //---
     spacing: vec3f,    //mm por voxel em x,y,z (vec3f alinha em 16 → offset 32)
+    //---
+    numChunks: vec3f,  //nº de chunks por eixo (f32 → u32 no shader; offset 48)
 };
 @group(2) @binding(0) var<uniform> params: Params;
 @group(2) @binding(1) var samp: sampler;
 @group(2) @binding(2) var volume: texture_3d<f32>;
 @group(2) @binding(3) var preint: texture_2d<f32>; //tabela pré-integrada T[sf][sb]
-@group(2) @binding(4) var gradient: texture_3d<f32>; //o gradiente
+@group(2) @binding(4) var gradient: texture_3d<f32>; //o gradiente pré-calculado
+@group(2) @binding(5) var<storage, read> occupied: array<u32>; //skip-map: 1=processa, 0=pula
 
-//Nº de fatias de REFERÊNCIA pro qual os alphas da CTF são calibrados — o
-//mesmo REFERENCE_SLICE_COUNT do material de slices e da pré-integração
-//(ctf.ts). A opacidade de um passo de tamanho h vira 1-(1-a)^(h/(1/REF)).
 const REFERENCE_SLICE_COUNT: f32 = 128.0;
-//Teto do laço de marcha (a diagonal da caixa a 1/256 dá ~443 passos).
 const MAX_STEPS: i32 = 512;
+//Nudge pra o salto de skip pousar DENTRO do próximo chunk (senão pode reler o
+//mesmo e travar). Em unidades de t (rd é normalizado no espaço local, caixa=1).
+const SKIP_EPS: f32 = 1e-4;
 
 struct VsOut {
     @builtin(position) position: vec4f,
-    @location(0) localPos: vec3f, //posição na caixa [-0.5,0.5]³ (interpolada)
-    //flat: entrega o índice da instância pro fragment achar a model dele
+    @location(0) localPos: vec3f,
     @location(1) @interpolate(flat) instance: u32,
 };
 
@@ -83,14 +86,7 @@ fn vs(
     out.instance = instance;
     return out;
 }
-// Retorna um valor pseudo-aleatório entre [0.0, 1.0) baseado na posição da tela
-fn interleaved_gradient_noise(xy: vec2f) -> f32 {
-    let magic = vec3f(0.06711056, 0.00583715, 52.9829189);
-    return fract(magic.z * fract(dot(xy, magic.xy)));
-}
-//Inversa da parte linear 3x3 (colunas a,b,c) via adjugada/determinante —
-//WGSL não tem inverse embutida. A caixa tem escala não-uniforme (proporções
-//físicas do exame), então precisa da inversa de verdade, não da transposta.
+
 fn inverse3(m: mat3x3f) -> mat3x3f {
     let a = m[0];
     let b = m[1];
@@ -109,19 +105,13 @@ fn inverse3(m: mat3x3f) -> mat3x3f {
 @fragment
 fn fs(in: VsOut) -> @location(0) vec4f {
     let model = models[in.instance];
-    //Câmera-mundo a partir da view (view = inverse(cameraWorld)): pra uma
-    //view rígida, cameraWorld = -Rᵀ·t, com R = parte 3x3 da view e t a
-    //translação. (Assume câmera sem escala — como o material de slices.)
     let R = mat3x3f(frame.view[0].xyz, frame.view[1].xyz, frame.view[2].xyz);
     let camWorld = -(transpose(R) * frame.view[3].xyz);
-    //Câmera no espaço LOCAL da caixa: local = invLin · (mundo - t).
     let invLin = inverse3(mat3x3f(model[0].xyz, model[1].xyz, model[2].xyz));
     let camLocal = invLin * (camWorld - model[3].xyz);
-    //O raio parte da câmera e passa pelo ponto de superfície deste fragment.
     let rd = normalize(in.localPos - camLocal);
 
-    //Interseção raio-caixa (slab) contra [-0.5,0.5]³. Divisão por zero em rd
-    //vira ±inf e o min/max resolve certo (comportamento IEEE).
+    //Interseção raio-caixa (slab) contra [-0.5,0.5]³.
     let invD = 1.0 / rd;
     let t0 = (vec3f(-0.5) - camLocal) * invD;
     let t1 = (vec3f(0.5) - camLocal) * invD;
@@ -129,61 +119,64 @@ fn fs(in: VsOut) -> @location(0) vec4f {
     let tbig = max(t0, t1);
     var tNear = max(max(tsmall.x, tsmall.y), tsmall.z);
     let tFar = min(min(tbig.x, tbig.y), tbig.z);
-    tNear = max(tNear, 0.0); //câmera dentro da caixa: começa em t=0
+    tNear = max(tNear, 0.0);
     if (tFar <= tNear) {
         discard;
     }
+
     let step = params.stepSize;
-    
-    let jitter = interleaved_gradient_noise(in.position.xy);
-    var t = tNear + jitter * step;
-    
-    //correção de opacidade: um passo h equivale a h/(1/REF) fatias de
-    //referência, logo alpha = 1-(1-aRef)^(h·REF). Mesma matemática do slice.
     let opacityExponent = step * REFERENCE_SLICE_COUNT;
     let range = max(params.ctfMax - params.ctfMin, 1e-6);
 
-    //Pré-cálculos do shading on-the-fly (só usados se o gradiente estiver on):
-    //espaçamento de 1 voxel em uvw por eixo (da resolução REAL do volume) e a
-    //luz fixa. textureDimensions é uniforme — fica fora do laço.
     let voxel = 1.0 / vec3f(textureDimensions(volume));
     let lightPos = vec3f(5.0, 5.0, 5.0);
-    //transpose(inverse(A)) = matriz de normais: leva o gradiente do espaço
-    //local pro mundo respeitando a escala não-uniforme da caixa.
     let normalMatrix = transpose(invLin);
 
-    //Composição FRONT-TO-BACK (marchamos da entrada pra saída = perto→longe).
-    //acc guarda cor JÁ pré-multiplicada pela cobertura + o alpha acumulado.
+    //ESS: hoisted pra fora do laço (uniformes). chunkCell = tamanho do chunk em
+    //uvw por eixo = chunkSize(voxels)/dims(voxels). O último chunk de um eixo
+    //pode ser parcial (numChunks*chunkSize >= dim) — o tFar da caixa grande já
+    //corta o excesso, então não precisa clamp no salto.
+    let chunkCell = vec3f(params.chunkSize) / vec3f(textureDimensions(volume));
+    let nChunks = vec3u(u32(params.numChunks.x), u32(params.numChunks.y), u32(params.numChunks.z));
+    let nChunksMax = vec3f(nChunks) - vec3f(1.0);
+
     var acc = vec4f(0.0);
-    // var t = tNear;
+    var t = tNear;
     for (var i = 0; i < MAX_STEPS; i = i + 1) {
         if (t >= tFar) {
             break;
         }
         let pLocal = camLocal + rd * t;
-        let uvw = pLocal + vec3f(0.5); //caixa [-0.5,0.5]³ → [0,1]³ de textura
-        //frente (sf, aqui) e fundo (sb, um passo adiante no raio)
+        let uvw = pLocal + vec3f(0.5);
+
+        //EMPTY-SPACE SKIPPING: chunk vazio pra CTF atual → salta pra saída da
+        //caixa DESTE chunk em vez de amostrar. cidxF (não-clampado) constrói o
+        //AABB; ci (clampado) indexa o skip-map sem estourar a borda.
+        if (params.useSkip > 0.5) {
+            let cidxF = floor(uvw / chunkCell);
+            let ci = vec3u(clamp(cidxF, vec3f(0.0), nChunksMax));
+            let flat = (ci.z * nChunks.y + ci.y) * nChunks.x + ci.x;
+            if (occupied[flat] == 0u) {
+                let loLocal = cidxF * chunkCell - vec3f(0.5);
+                let hiLocal = loLocal + chunkCell;
+                let tLo = (loLocal - camLocal) * invD;
+                let tHi = (hiLocal - camLocal) * invD;
+                let tExit = min(min(max(tLo.x, tHi.x), max(tLo.y, tHi.y)), max(tLo.z, tHi.z));
+                t = tExit + SKIP_EPS;
+                continue;
+            }
+        }
+
         let sf = textureSampleLevel(volume, samp, uvw, 0.0).r;
         let sb = textureSampleLevel(volume, samp, uvw + rd * step, 0.0).r;
-        //sf/sb normalizados endereçam a tabela 2D; clamp-to-edge estende as
-        //pontas do domínio. x = sf (frente), y = sb (fundo).
         let uf = (sf - params.ctfMin) / range;
         let ub = (sb - params.ctfMin) / range;
         let c = textureSampleLevel(preint, samp, vec2f(uf, ub), 0.0);
 
-        //SHADING opcional (dois modos, escolhidos pelo gradientType):
-        //  on-the-fly → 6 amostras EXTRAS do volume por passo (diferenças
-        //               centrais /spacing) — caro, mede o custo do gradiente
-        //               calculado na marcha;
-        //  pré-calc   → 1 amostra da textura 3D de gradiente (rgb = direção).
-        //Sem gradiente, cor chapada da CTF.
         var rgb = c.rgb;
         if (params.useGradient > 0.5) {
             var gLocal = vec3f(0,0,0);
             if(params.gradientType > 0.5) {
-                //diferença central / (2·spacing) = HU/mm, IGUAL ao gradientCompute:
-                //é o /spacing que iguala a DIREÇÃO ao modo pré-calculado num
-                //volume anisotrópico (senão o eixo mais grosso pesa demais).
                 let gx = (textureSampleLevel(volume, samp, uvw + vec3f(voxel.x, 0.0, 0.0), 0.0).r
                        -  textureSampleLevel(volume, samp, uvw - vec3f(voxel.x, 0.0, 0.0), 0.0).r) / (2.0 * params.spacing.x);
                 let gy = (textureSampleLevel(volume, samp, uvw + vec3f(0.0, voxel.y, 0.0), 0.0).r
@@ -193,20 +186,11 @@ fn fs(in: VsOut) -> @location(0) vec4f {
                 gLocal = vec3f(gx, gy, gz);
             }
             else {
-                //gradiente pré-calculado: rgb guarda a DIREÇÃO reempacotada de
-                //[-1,1] pra [0,1] (ver gradientCompute), decodifica com rgb*2-1.
-                //textureSampleLevel (não textureSample): estamos em non-uniform
-                //control flow dentro do laço.
                 let dHU = textureSampleLevel(gradient, samp, uvw, 0.0);
-                let g = dHU.xyz * 2.0 - 1.0;
-                gLocal = g;
+                gLocal = dHU.xyz * 2.0 - 1.0;
             }
 
-            //normalize explodiria em região homogênea (gradiente ~0): só
-            //sombreia onde há borda de verdade; senão fica a cor chapada.
             if (length(gLocal) > 0.001) {
-                //normal aponta CONTRA o gradiente (do denso pro menos denso =
-                //pra FORA da estrutura), levada ao mundo pela matriz de normais
                 let N = normalize(normalMatrix * (-gLocal));
                 let pWorld = (model * vec4f(pLocal, 1.0)).xyz;
                 let L = normalize(lightPos - pWorld);
@@ -214,26 +198,25 @@ fn fs(in: VsOut) -> @location(0) vec4f {
                 let H = normalize(L + V);
                 let diffuse = max(dot(N, L), 0.0);
                 let specular = pow(max(dot(N, H), 0.0), 32.0);
-                let ambient = 0.2; //pro lado oposto à luz não ir a preto absoluto
+                let ambient = 0.2;
                 rgb = c.rgb * (ambient + (1.0 - ambient) * diffuse) + vec3f(0.3 * specular);
             }
         }
 
         let aRef = clamp(c.a * params.alphaScale, 0.0, 1.0);
         let alpha = 1.0 - pow(1.0 - aRef, opacityExponent);
-        let w = (1.0 - acc.a) * alpha; //peso deste passo na composição
+        let w = (1.0 - acc.a) * alpha;
         acc = vec4f(acc.rgb + w * rgb, acc.a + w);
         if (acc.a >= 0.995) {
-            break; //early ray termination: opaco o bastante, o resto não aparece
+            break;
         }
         t = t + step;
     }
-    return acc; //pré-multiplicado — o pipeline usa blend premultiplied
+    return acc;
 }
 `;
 
-export class VolumeRaycastMaterial extends Material {
-    //---- nível do TIPO: static, compartilhado por todas as instâncias ----
+export class VolumeRaycastESSMaterial extends Material {
     private static shaderModule: GPUShaderModule | null = null;
     private static materialLayout: GPUBindGroupLayout | null = null;
     private static sampler: GPUSampler | null = null;
@@ -242,37 +225,25 @@ export class VolumeRaycastMaterial extends Material {
     private static getMaterialBindGroupLayout(device: GPUDevice): GPUBindGroupLayout {
         if (!this.materialLayout) {
             this.materialLayout = device.createBindGroupLayout({
-                label: "VolumeRaycastMaterial material",
+                label: "VolumeRaycastESSMaterial material",
                 entries: [
                     { binding: 0, visibility: GPUShaderStage.FRAGMENT, buffer: { type: "uniform" } },
                     { binding: 1, visibility: GPUShaderStage.FRAGMENT, sampler: {} },
-                    {
-                        binding: 2,
-                        visibility: GPUShaderStage.FRAGMENT,
-                        texture: { sampleType: "float", viewDimension: "3d" },
-                    },
-                    {
-                        binding: 3,
-                        visibility: GPUShaderStage.FRAGMENT,
-                        texture: { sampleType: "float", viewDimension: "2d" },
-                    },
-                    {
-                        binding: 4,
-                        visibility: GPUShaderStage.FRAGMENT,
-                        texture: {sampleType: "float", viewDimension:"3d"},
-                    }
+                    { binding: 2, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: "float", viewDimension: "3d" } },
+                    { binding: 3, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: "float", viewDimension: "2d" } },
+                    { binding: 4, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: "float", viewDimension: "3d" } },
+                    //o skip-map: storage read-only no fragment (igual aos models do grupo 1)
+                    { binding: 5, visibility: GPUShaderStage.FRAGMENT, buffer: { type: "read-only-storage" } },
                 ],
             });
         }
         return this.materialLayout;
     }
 
-    //Linear + clamp: serve ao volume (r16float é filterable) E à tabela
-    //pré-integrada — o clamp é o que estende as pontas do domínio da CTF.
     private static getSampler(device: GPUDevice): GPUSampler {
         if (!this.sampler) {
             this.sampler = device.createSampler({
-                label: "VolumeRaycastMaterial sampler",
+                label: "VolumeRaycastESSMaterial sampler",
                 magFilter: "linear",
                 minFilter: "linear",
                 addressModeU: "clamp-to-edge",
@@ -287,14 +258,14 @@ export class VolumeRaycastMaterial extends Material {
         const { device } = ctx;
         if (!this.shaderModule) {
             this.shaderModule = device.createShaderModule({
-                label: "VolumeRaycastMaterial shader",
-                code: RAYCAST_WGSL,
+                label: "VolumeRaycastESSMaterial shader",
+                code: RAYCAST_ESS_WGSL,
             });
         }
         return device.createRenderPipeline({
-            label: "VolumeRaycastMaterial (Static)",
+            label: "VolumeRaycastESSMaterial (Static)",
             layout: device.createPipelineLayout({
-                label: "VolumeRaycastMaterial pipeline layout",
+                label: "VolumeRaycastESSMaterial pipeline layout",
                 bindGroupLayouts: [
                     ctx.frameBindGroupLayout,
                     ctx.objectBindGroupLayout,
@@ -312,8 +283,6 @@ export class VolumeRaycastMaterial extends Material {
                 targets: [
                     {
                         format: ctx.colorFormat,
-                        //saída pré-multiplicada compondo sobre o que o pass
-                        //já limpou (o fundo do MeshRenderPass)
                         blend: {
                             color: { srcFactor: "one", dstFactor: "one-minus-src-alpha" },
                             alpha: { srcFactor: "one", dstFactor: "one-minus-src-alpha" },
@@ -321,41 +290,40 @@ export class VolumeRaycastMaterial extends Material {
                     },
                 ],
             },
-            //cullMode "front" = desenha as BACK-FACES: garante um fragment por
-            //pixel da silhueta mesmo com a câmera dentro da caixa.
             primitive: { topology: "triangle-list", cullMode: "front" },
             depthStencil: {
                 format: ctx.depthFormat,
-                depthWriteEnabled: false, //objeto único; não precisa escrever depth
+                depthWriteEnabled: false,
                 depthCompare: "less-equal",
             },
         });
     }
 
-    //---- nível da INSTÂNCIA: volume + CTF + parâmetros desta instância ----
     private readonly device: GPUDevice;
     private readonly volumeTexture: GPUTexture;
     private readonly preintTexture: GPUTexture;
     private readonly gradientTexture: GPUTexture;
     private readonly paramsBuffer: GPUBuffer;
+    //o skip-map (1 u32/chunk); a CPU o preenche via setSkipMap
+    private readonly occupiedBuffer: GPUBuffer;
     private readonly bindGroup: GPUBindGroup;
-    //domínio corrente da CTF — guardado pra os setters reescreverem o
-    //uniform inteiro sem rebakear a tabela
     private ctfMin = 0;
     private ctfMax = 1;
     private alphaScale: number;
     private readonly stepSize: number;
-    //0 ou 1 (o shader compara > 0.5) — liga o shading por gradiente on-the-fly
     private useGradient: number;
-    //0 ou 1 - precalc x on-the-fly
     private gradientType: number;
-    //mm por voxel [x,y,z] — o on-the-fly divide por isto pra a direção do
-    //gradiente bater com o modo pré-calculado (mesmo /spacing do gradientCompute)
+    private useSkip: number;
     private readonly spacing: [number, number, number];
+    private readonly numChunksX: number;
+    private readonly numChunksY: number;
+    private readonly numChunksZ: number;
+    private readonly chunkSizeVoxels: number;
 
     /**
-     * O material só AMOSTRA volumeTexture e gradientTexture; a posse (destroy)
-     * é de quem as criou — o RaycastWorld.
+     * O material só AMOSTRA volumeTexture e gradientTexture; a posse (destroy) é
+     * de quem as criou — o RaycastESSWorld. O skip-map (occupiedBuffer) é do
+     * material (ele o aloca e o destrói).
      */
     constructor(
         device: GPUDevice,
@@ -365,9 +333,12 @@ export class VolumeRaycastMaterial extends Material {
         spacing: [number, number, number],
         /** Pontos de controle da CTF, ordenados por HU (ver ctf.ts). */
         ctfPoints: readonly CtfPoint[],
+        /** Grade de chunks do exame (metadata) — dimensiona o skip-map + índice. */
+        chunkGrid: ChunkGrid,
         alphaScale = 0.3,
         gradientShading = false,
         gradientType = 1,
+        emptySpaceSkip = true,
         stepSize = DEFAULT_STEP_SIZE,
     ) {
         super();
@@ -378,43 +349,50 @@ export class VolumeRaycastMaterial extends Material {
         this.alphaScale = alphaScale;
         this.useGradient = gradientShading ? 1 : 0;
         this.gradientType = gradientType;
+        this.useSkip = emptySpaceSkip ? 1 : 0;
         this.stepSize = stepSize;
+        this.numChunksX = chunkGrid.numChunksX;
+        this.numChunksY = chunkGrid.numChunksY;
+        this.numChunksZ = chunkGrid.numChunksZ;
+        this.chunkSizeVoxels = chunkGrid.chunkSize;
 
         this.paramsBuffer = device.createBuffer({
-            label: "VolumeRaycastMaterial params",
-            //struct Params com spacing:vec3f alinha em 16 → 48 bytes (12 floats,
-            //com padding nos índices 6,7 e 11 — ver writeParams)
-            size: 48,
+            label: "VolumeRaycastESSMaterial params",
+            //struct Params: spacing:vec3f e numChunks:vec3f alinham em 16 → 64
+            //bytes (16 floats, padding nos índices 11 e 15 — ver writeParams)
+            size: 64,
             usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
         });
         this.preintTexture = device.createTexture({
-            label: "VolumeRaycastMaterial preintegration table",
+            label: "VolumeRaycastESSMaterial preintegration table",
             size: [PREINT_TABLE_SIZE, PREINT_TABLE_SIZE, 1],
             format: "rgba8unorm",
             usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST,
         });
+        this.occupiedBuffer = device.createBuffer({
+            label: "VolumeRaycastESSMaterial skip-map (occupied)",
+            size: Math.max(chunkGrid.totalChunks, 1) * 4,
+            usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
+        });
+        //default seguro: tudo ocupado (processa tudo) até o world/behaviour
+        //mandarem o skip-map de verdade — assim nada é pulado por engano.
+        this.setSkipMap(new Uint32Array(chunkGrid.totalChunks).fill(1));
         this.setCtf(ctfPoints); //bakeia a tabela + escreve os params
 
         this.bindGroup = device.createBindGroup({
-            label: "VolumeRaycastMaterial instance",
-            layout: VolumeRaycastMaterial.getMaterialBindGroupLayout(device),
+            label: "VolumeRaycastESSMaterial instance",
+            layout: VolumeRaycastESSMaterial.getMaterialBindGroupLayout(device),
             entries: [
                 { binding: 0, resource: { buffer: this.paramsBuffer } },
-                { binding: 1, resource: VolumeRaycastMaterial.getSampler(device) },
+                { binding: 1, resource: VolumeRaycastESSMaterial.getSampler(device) },
                 { binding: 2, resource: this.volumeTexture.createView({ dimension: "3d" }) },
                 { binding: 3, resource: this.preintTexture.createView() },
-                //gradiente pré-calculado (viewDimension 3d, igual ao volume);
-                //casa com o binding 4 do layout, senão createBindGroup estoura
                 { binding: 4, resource: this.gradientTexture.createView({ dimension: "3d" }) },
+                { binding: 5, resource: { buffer: this.occupiedBuffer } },
             ],
         });
     }
 
-    /**
-     * Troca a curva em runtime: rebakeia a tabela 2D pré-integrada e atualiza
-     * o domínio no uniform. É o que a VolumeRaycastBehaviour chama quando o
-     * state ctf do redux muda — o MESMO caminho do material de slices.
-     */
     setCtf(points: readonly CtfPoint[]): void {
         const baked = bakePreIntegrationTable(points);
         this.ctfMin = baked.huMin;
@@ -428,34 +406,43 @@ export class VolumeRaycastMaterial extends Material {
         this.writeParams();
     }
 
-    /** Ajusta a diluição de opacidade por passo em runtime (knob da UI). */
     setAlphaScale(alphaScale: number): void {
         this.alphaScale = alphaScale;
         this.writeParams();
     }
 
-    /**
-     * Liga/desliga o shading por gradiente on-the-fly (toggle da UI). Ligado,
-     * o shader faz 6 amostras extras do volume por passo — deliberadamente
-     * caro, pra medir o custo real do gradiente calculado na marcha.
-     */
-    setGradientShading(enabled: boolean, onTheFly:boolean): void {
+    setGradientShading(enabled: boolean, onTheFly: boolean): void {
         this.useGradient = enabled ? 1 : 0;
-        this.gradientType = onTheFly? 1: 0;
+        this.gradientType = onTheFly ? 1 : 0;
         this.writeParams();
     }
 
+    /** Liga/desliga o empty-space skipping (pra A/B de velocidade). */
+    setEmptySpaceSkip(enabled: boolean): void {
+        this.useSkip = enabled ? 1 : 0;
+        this.writeParams();
+    }
+
+    /**
+     * Reescreve o skip-map inteiro (1 u32/chunk, 1=processa/0=pula). Chamado
+     * pelo world na criação e pela behaviour toda vez que a CTF muda. O array
+     * tem que ter totalChunks elementos, na ordem row-major (z,y,x).
+     */
+    setSkipMap(occupied: Uint32Array<ArrayBuffer>): void {
+        this.device.queue.writeBuffer(this.occupiedBuffer, 0, occupied);
+    }
+
     private writeParams(): void {
-        //layout do struct Params (std140-ish do uniform): spacing:vec3f exige
-        //offset múltiplo de 16 → cai no byte 32 (índice 8). Índices 6,7 (bytes
-        //24,28) e 11 (byte 44) são padding e vão 0.
+        //struct Params (uniform std140-ish): spacing:vec3f no byte 32 (índice 8),
+        //numChunks:vec3f no byte 48 (índice 12). Índices 11 e 15 são padding.
         this.device.queue.writeBuffer(
             this.paramsBuffer,
             0,
             new Float32Array([
                 this.ctfMin, this.ctfMax, this.alphaScale, this.stepSize,
-                this.useGradient, this.gradientType, 0, 0,
+                this.useGradient, this.gradientType, this.useSkip, this.chunkSizeVoxels,
                 this.spacing[0], this.spacing[1], this.spacing[2], 0,
+                this.numChunksX, this.numChunksY, this.numChunksZ, 0,
             ]),
         );
     }
@@ -463,23 +450,32 @@ export class VolumeRaycastMaterial extends Material {
     override getPipeline(ctx: PipelineContext, meshType: MeshType): GPURenderPipeline {
         if (meshType !== MeshType.Static) {
             throw new Error(
-                `VolumeRaycastMaterial só desenha MeshType.Static (o proxy-cube), recebeu ${MeshType[meshType]}.`,
+                `VolumeRaycastESSMaterial só desenha MeshType.Static (o proxy-cube), recebeu ${MeshType[meshType]}.`,
             );
         }
-        if (!VolumeRaycastMaterial.pipeline) {
-            VolumeRaycastMaterial.pipeline = VolumeRaycastMaterial.createPipeline(ctx);
+        if (!VolumeRaycastESSMaterial.pipeline) {
+            VolumeRaycastESSMaterial.pipeline = VolumeRaycastESSMaterial.createPipeline(ctx);
         }
-        return VolumeRaycastMaterial.pipeline;
+        return VolumeRaycastESSMaterial.pipeline;
     }
 
     override getBindGroup(): GPUBindGroup {
         return this.bindGroup;
     }
 
-    /** Libera a textura 3D, a tabela pré-integrada e o buffer de params. */
+    /**
+     * O buffer do skip-map (1 u32/chunk). O DebugChunksPass o lê pra saber
+     * quais chunks desenhar — MESMA fonte de verdade, atualiza junto quando a
+     * behaviour chama setSkipMap na mudança de CTF.
+     */
+    get skipMapBuffer(): GPUBuffer {
+        return this.occupiedBuffer;
+    }
+
     override destroy(): void {
         this.volumeTexture.destroy();
         this.preintTexture.destroy();
         this.paramsBuffer.destroy();
+        this.occupiedBuffer.destroy();
     }
 }

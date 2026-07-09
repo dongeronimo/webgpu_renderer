@@ -18,8 +18,11 @@ import { WorldSwitch } from "./base/WorldSwitch";
 import { FloatingPanel } from "./generic/FloatingPanel";
 import { GpuStats } from "./GpuStats";
 import { RaycastWorld } from "../raycast/raycastWorld";
+import { RaycastESSWorld } from "../raycastESS/raycastESSWorld";
 import { OrbitControls } from "./OrbitControls";
 import RaycastRenderProperties from "./raycast/raycastRenderProperties";
+import RaycastESSRenderProperties from "./raycast_ess/raycastESSRenderProperties";
+import { CtfEditorPanel } from "./ctf/CtfEditorPanel";
 
 export function TerraPositionTable({ world }: { world: World }) {
     //Snapshot da translação global (colunas 12/13/14 da worldMatrix) —
@@ -88,6 +91,9 @@ function WorldUi({ world }: { world: World }) {
     if (world instanceof RaycastWorld) {
         return <RaycastRenderProperties />;
     }
+    if (world instanceof RaycastESSWorld) {
+        return <RaycastESSRenderProperties/>
+    }
     //mundo sem UI própria: fica só o WorldSwitch na tela
     return null;
 }
@@ -101,8 +107,15 @@ export function App({ world }: { world: World }) {
         <>
             {/*captura de mouse pra órbita: PRIMEIRO filho de propósito —
                pinta atrás dos painéis, então drag/scroll no vazio orbitam e
-               nos painéis continuam sendo do painel. Só no mundo que orbita.*/}
-            {world instanceof RaycastWorld && <OrbitControls />}
+               nos painéis continuam sendo do painel. Só nos mundos que orbitam
+               (baseline + ESS, ambos com a OrbitCameraBehaviour).*/}
+            {(world instanceof RaycastWorld || world instanceof RaycastESSWorld) && <OrbitControls />}
+            {/*Editor de CTF: painel próprio, nos mundos que consomem o state ctf
+               (CT + os raycasters). A CTF é da modalidade, então o mesmo editor
+               serve os três — e editar aqui estressa o recálculo do skip-map.*/}
+            {(world instanceof TextureStackVolumeRendererCT
+                || world instanceof RaycastWorld
+                || world instanceof RaycastESSWorld) && <CtfEditorPanel />}
             <WorldSwitch />
             {/*desempenho é da app, como o WorldSwitch: é o instrumento de
                comparação ENTRE mundos, sobrevive à troca*/}

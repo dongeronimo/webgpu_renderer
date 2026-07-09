@@ -9,6 +9,7 @@ import { TextureSliceGenerator } from "../textureStackVolumeRender/textureSliceG
 import { SetNumSlicesBehaviour } from "./setNumSlicesBehaviour";
 import { SetCtfBehaviour } from "./setCtfBehaviour";
 import { store } from "../redux/store";
+import { setCtfHuRange } from "../redux/actions";
 import { TransparentSlicesRenderPass } from "../textureStackVolumeRender/TransparentSlicesRenderPass";
 import { SetAlphaScaleBehaviour } from "./setAlphaScaleBehaviour";
 import { createGradientTexture, gradientParamsFromMetadata } from "./gradientCompute";
@@ -76,6 +77,8 @@ export class TextureStackVolumeRendererCT extends World {
 
         //o CT convertido: textura 3D r16float com HU + o metadata do exame
         const { texture, metadata } = await loadVolumeTexture(this.device, VOLUME_URL);
+        //Faixa de HU do exame → redux, pro editor de CTF usar como eixo X.
+        store.dispatch(setCtfHuRange(metadata.huMin, metadata.huMax));
         // Calcula o gradiente da textura (spacing e maxMagnitude extraídos
         // do metadata pelo helper — as tags DICOM vêm como string)
         this.gradientTexture = createGradientTexture(this.device, texture, gradientParamsFromMetadata(metadata));

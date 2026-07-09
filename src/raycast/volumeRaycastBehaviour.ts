@@ -20,6 +20,10 @@ export class VolumeRaycastBehaviour extends Behaviour {
     //createWorld), então o primeiro update não conta como mudança.
     private lastCtf = store.getState().ctf.points;
     private lastAlpha = store.getState().textureBasedCT.alphaScale;
+    //idem pro gradiente: o material nasce em useGradient=0 / on-the-fly, que
+    //é o estado inicial do store — logo o 1º update não dispara escrita.
+    private lastGradientEnabled = store.getState().raycast.gradientEnabled;
+    private lastGradientMode = store.getState().raycast.gradientMode;
 
     constructor(private readonly material: VolumeRaycastMaterial) {
         super();
@@ -37,6 +41,20 @@ export class VolumeRaycastBehaviour extends Behaviour {
         if (alpha !== this.lastAlpha) {
             this.lastAlpha = alpha;
             this.material.setAlphaScale(alpha);
+        }
+        //gradiente: enable + modo. SEMPRE repassa o enable — o bug era só
+        //chamar quando ligado, então desligar nunca chegava ao material (ele
+        //ficava com o useGradient da última vez que ligou). lastSeen nos DOIS
+        //campos pra reescrever o uniform só quando algo muda.
+        const raycast = store.getState().raycast;
+        if (raycast.gradientEnabled !== this.lastGradientEnabled ||
+            raycast.gradientMode !== this.lastGradientMode) {
+            this.lastGradientEnabled = raycast.gradientEnabled;
+            this.lastGradientMode = raycast.gradientMode;
+            this.material.setGradientShading(
+                raycast.gradientEnabled,
+                raycast.gradientMode === "on-the-fly",
+            );
         }
     }
 }

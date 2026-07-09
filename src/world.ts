@@ -15,7 +15,7 @@ import { destroyInstance } from "./prefab";
  *   5. destroy()       — libera GPU e solta o canvas; com tudo autocontido
  *      assim, trocar de "fase" é destroy() num mundo e 1–3 no próximo.
  */
-export abstract class World {
+export abstract class World  {
     protected rootNode:Node;
     protected readonly device:GPUDevice;
     /**

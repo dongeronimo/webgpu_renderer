@@ -17,6 +17,7 @@ import { SolarSystem } from "./solarSystem/solarSystemWorld";
 import { TextureStackVolumeRendererCT } from "./textureStackVolumeRenderCT/textureStackVolumeRenderCTWorld";
 import { StarshipDemoWorld } from "./StarshipDemo/StarshipDemoWorld";
 import { RaycastWorld } from "./raycast/raycastWorld";
+import { RaycastESSWorld } from "./raycastESS/raycastESSWorld";
 const status = document.getElementById("status")!;
 // Todas as behaviours que o sistema for usar tem que ser registradas aqui devido
 // a falta de reflection de verdade depois da minificaçaõ, que caga os nomes das
@@ -114,6 +115,12 @@ async function main() {
               raycastWorld.createRenderPasses(canvas,  canvasFormat);
               await raycastWorld.createWorld({aspect:canvas.width/canvas.height, fovy:45, near:0.1, far:100});
               currentWorld = raycastWorld;
+              break;
+            case "raycastESS":
+              const raycastESSWorld = new RaycastESSWorld(device);
+              raycastESSWorld.createRenderPasses(canvas,  canvasFormat);
+              await raycastESSWorld.createWorld({aspect:canvas.width/canvas.height, fovy:45, near:0.1, far:100});
+              currentWorld = raycastESSWorld;
               break;
          }
          setUiWorld(currentWorld);

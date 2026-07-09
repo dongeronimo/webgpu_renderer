@@ -12,6 +12,7 @@
     "@gltf-transform/core": "^4.4.1",
     "@gltf-transform/extensions": "^4.4.1",
     "react": "^19.2.7",
+    "react-colorful": "^5.7.0",
     "react-dom": "^19.2.7",
     "react-redux": "^9.3.0",
     "redux": "^5.0.1",
