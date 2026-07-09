@@ -18,12 +18,21 @@ export const CTF_SET_POINTS = "CTF_SET_POINTS";
 export const SET_ALPHA_SCALE = "SET_ALPHA_SCALE";
 
 export const SET_DEBUG_VIEW_ACTIVE = "SET_DEBUG_VIEW";
+
+//Câmera orbital: o React (OrbitControls) despacha; o reducer acumula yaw e
+//clampa pitch; a OrbitCameraBehaviour lê e posiciona o nó da câmera.
+export const ORBIT_CAMERA = "ORBIT_CAMERA";
+export const ZOOM_CAMERA = "ZOOM_CAMERA";
+
+//Raycaster: o toggle da UI liga/desliga o shading por gradiente on-the-fly;
+//a VolumeRaycastBehaviour lê e repassa pro material.
+export const SET_RAYCAST_GRADIENT_SHADING = "SET_RAYCAST_GRADIENT_SHADING";
 /**
  * Os mundos da app, como union e não string solta — mesmo critério do
  * RenderPassBit: typo morre em compile time. Cresce junto com os mundos.
  */
-export type WorldName = "solarSystem" | "textureStackVolumeRenderSynthetic" | 
-"textureStackVolumeRenderCT" | "StarshipDemo";
+export type WorldName = "solarSystem" | "textureStackVolumeRenderSynthetic" |
+"textureStackVolumeRenderCT" | "StarshipDemo" | "raycast";
 
 export interface HelloClickedAction {
     type: typeof HELLO_CLICKED;
@@ -54,6 +63,23 @@ export interface SetDebugViewActive {
     payload: boolean;
 }
 
+export interface OrbitCameraAction {
+    type: typeof ORBIT_CAMERA;
+    /** Deltas de órbita em radianos (já convertidos de pixels no React). */
+    payload: { dYaw: number; dPitch: number };
+}
+
+export interface ZoomCameraAction {
+    type: typeof ZOOM_CAMERA;
+    /** Fator multiplicativo do raio (<1 aproxima, >1 afasta). */
+    payload: number;
+}
+
+export interface SetRaycastGradientShadingAction {
+    type: typeof SET_RAYCAST_GRADIENT_SHADING;
+    payload: boolean;
+}
+
 export function helloClicked(): HelloClickedAction {
     return { type: HELLO_CLICKED };
 }
@@ -78,6 +104,18 @@ export function SetDebugViewActive(value:boolean): SetDebugViewActive {
     return { type: SET_DEBUG_VIEW_ACTIVE, payload: value};
 }
 
+export function orbitCamera(dYaw: number, dPitch: number): OrbitCameraAction {
+    return { type: ORBIT_CAMERA, payload: { dYaw, dPitch } };
+}
+
+export function zoomCamera(factor: number): ZoomCameraAction {
+    return { type: ZOOM_CAMERA, payload: factor };
+}
+
+export function setRaycastGradientShading(enabled: boolean): SetRaycastGradientShadingAction {
+    return { type: SET_RAYCAST_GRADIENT_SHADING, payload: enabled };
+}
+
 //União de todas as actions da app — cresce conforme a UI cresce. TODO
 //reducer é tipado com ela: no redux, todo reducer recebe TODA action e
 //ignora (default) as que não conhece.
@@ -87,4 +125,7 @@ export type AppAction =
     | SetTextureBasedCTNumSlicesAction
     | SetCtfPointsAction
     | SetAlphaScaleAction
-    | SetDebugViewActive;
+    | SetDebugViewActive
+    | OrbitCameraAction
+    | ZoomCameraAction
+    | SetRaycastGradientShadingAction;

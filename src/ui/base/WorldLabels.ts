@@ -9,4 +9,5 @@ export const worldLabels: Record<WorldName, string> = {
     textureStackVolumeRenderSynthetic: "Texture-based slicing (sintético)",
     textureStackVolumeRenderCT: "Texture-based slicing (CT)",
     StarshipDemo : "Starship (demo)",
+    raycast: "Raycaster",
 };

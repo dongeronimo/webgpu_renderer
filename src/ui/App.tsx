@@ -17,6 +17,9 @@ import TbCTRenderProperties from "./textureBasedCT/tbCTRenderProperties";
 import { WorldSwitch } from "./base/WorldSwitch";
 import { FloatingPanel } from "./generic/FloatingPanel";
 import { GpuStats } from "./GpuStats";
+import { RaycastWorld } from "../raycast/raycastWorld";
+import { OrbitControls } from "./OrbitControls";
+import RaycastRenderProperties from "./raycast/raycastRenderProperties";
 
 export function TerraPositionTable({ world }: { world: World }) {
     //Snapshot da translação global (colunas 12/13/14 da worldMatrix) —
@@ -82,6 +85,9 @@ function WorldUi({ world }: { world: World }) {
     if (world instanceof TextureStackVolumeRendererCT) {
         return <TbCTRenderProperties world={world} />;
     }
+    if (world instanceof RaycastWorld) {
+        return <RaycastRenderProperties />;
+    }
     //mundo sem UI própria: fica só o WorldSwitch na tela
     return null;
 }
@@ -93,6 +99,10 @@ export function App({ world }: { world: World }) {
     //sobrevive à troca com estado (drag/minimizado) intacto.
     return (
         <>
+            {/*captura de mouse pra órbita: PRIMEIRO filho de propósito —
+               pinta atrás dos painéis, então drag/scroll no vazio orbitam e
+               nos painéis continuam sendo do painel. Só no mundo que orbita.*/}
+            {world instanceof RaycastWorld && <OrbitControls />}
             <WorldSwitch />
             {/*desempenho é da app, como o WorldSwitch: é o instrumento de
                comparação ENTRE mundos, sobrevive à troca*/}

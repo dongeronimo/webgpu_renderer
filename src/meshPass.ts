@@ -88,10 +88,16 @@ export class MeshRenderPass {
         this.colorLoadOp = colorLoadOp;
         this.depthStoreOp = depthStoreOp;
 
+        //VERTEX | FRAGMENT: a mesh opaca só lê frame/objeto no vertex, mas um
+        //material de raymarch (VolumeRaycast) precisa deles no FRAGMENT — a
+        //view pra reconstruir a câmera e a model pra levar o raio ao espaço
+        //local da caixa. Alargar a visibilidade é superset benigno (quem só
+        //usa no vertex continua válido); é o mesmo que o TransparentSlices
+        //RenderPass já faz nos layouts dele.
         const frameBindGroupLayout = device.createBindGroupLayout({
             label: "mesh pass frame (grupo 0)",
             entries: [
-                { binding: 0, visibility: GPUShaderStage.VERTEX, buffer: { type: "uniform" } },
+                { binding: 0, visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT, buffer: { type: "uniform" } },
             ],
         });
         const objectBindGroupLayout = device.createBindGroupLayout({
@@ -99,7 +105,7 @@ export class MeshRenderPass {
             entries: [
                 {
                     binding: 0,
-                    visibility: GPUShaderStage.VERTEX,
+                    visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT,
                     buffer: { type: "read-only-storage" },
                 },
             ],

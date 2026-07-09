@@ -2,7 +2,7 @@
 //switch e spread — sem toolkit, sem immer.
 import { combineReducers } from "redux";
 import type { CtfPoint } from "../ctf";
-import { CTF_SET_POINTS, HELLO_CLICKED, SET_ALPHA_SCALE, SET_DEBUG_VIEW_ACTIVE, SWITCH_WORLD, TEXTURE_BASED_CT_SET_NUM_SLICES, type AppAction, type WorldName } from "./actions";
+import { CTF_SET_POINTS, HELLO_CLICKED, ORBIT_CAMERA, SET_ALPHA_SCALE, SET_DEBUG_VIEW_ACTIVE, SWITCH_WORLD, TEXTURE_BASED_CT_SET_NUM_SLICES, ZOOM_CAMERA, type AppAction, type WorldName } from "./actions";
 
 export interface HelloState {
     /** Quantas vezes o botão de hello foi clicado. */
@@ -36,6 +36,18 @@ export interface TextureBasedCTState {
  */
 export interface CtfState {
     points: CtfPoint[];
+}
+
+/**
+ * Estado da câmera orbital (raycaster). Coordenadas esféricas ao redor da
+ * mesh do volume: yaw gira no +Y do mundo, pitch é a elevação (clampada pra
+ * o lookAt não degenerar no polo), radius é a distância ao alvo. O React
+ * (OrbitControls) escreve; a OrbitCameraBehaviour lê e posiciona o nó.
+ */
+export interface CameraState {
+    yaw: number;
+    pitch: number;
+    radius: number;
 }
 
 const helloInitial: HelloState = {
@@ -74,6 +86,36 @@ const ctfInitial: CtfState = {
         { hu: 1000, r: 1.0, g: 0.98, b: 0.92, a: 0.95 },
     ],
 };
+
+//Pitch máximo (~89°): abaixo do polo, onde o up (0,1,0) do lookAt ficaria
+//paralelo à direção de visão e a orientação degeneraria.
+const MAX_PITCH = (89 * Math.PI) / 180;
+const MIN_RADIUS = 0.6;
+const MAX_RADIUS = 8;
+
+//Valor inicial calibrado pra reproduzir o enquadramento anterior do
+//raycaster: yaw 0, leve elevação, ~2.3 de distância → câmera em (0, 0.6, 2.2).
+const cameraInitial: CameraState = {
+    yaw: 0,
+    pitch: (15 * Math.PI) / 180,
+    radius: 2.3,
+};
+
+function cameraReducer(state: CameraState = cameraInitial, action: AppAction): CameraState {
+    switch (action.type) {
+        case ORBIT_CAMERA: {
+            const yaw = state.yaw + action.payload.dYaw;
+            const pitch = Math.min(Math.max(state.pitch + action.payload.dPitch, -MAX_PITCH), MAX_PITCH);
+            return { ...state, yaw, pitch };
+        }
+        case ZOOM_CAMERA: {
+            const radius = Math.min(Math.max(state.radius * action.payload, MIN_RADIUS), MAX_RADIUS);
+            return { ...state, radius };
+        }
+        default:
+            return state;
+    }
+}
 
 function helloReducer(state: HelloState = helloInitial, action: AppAction): HelloState {
     switch (action.type) {
@@ -127,6 +169,7 @@ export const rootReducer = combineReducers({
     base: baseReducer,
     textureBasedCT: textureBasedCTReducer,
     ctf: ctfReducer,
+    camera: cameraReducer,
 });
 
 //O shape do state inteiro, derivado do rootReducer — é o tipo que os

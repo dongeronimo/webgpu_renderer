@@ -5,4 +5,9 @@ import react from "@vitejs/plugin-react";
 //renderer) e garante o JSX automatic runtime.
 export default defineConfig({
     plugins: [react()],
+    //Porta vem da env var PORT (ex.: `$env:PORT=4000; npm run dev` no PowerShell).
+    //Sem PORT cai no default 5173. Linha idêntica em todos os branches p/ não conflitar em merge.
+    server: {
+        port: Number(process.env.PORT) || 5173,
+    },
 });
