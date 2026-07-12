@@ -20,6 +20,7 @@ import { RaycastWorld } from "./raycast/raycastWorld";
 import { RaycastESSWorld } from "./raycastESS/raycastESSWorld";
 import { GameVolumeWorld } from "./gameVolume/gameVolumeWorld";
 import { TrainWorld } from "./train/trainWorld";
+import { SkinningDemoWorld } from "./skinning/SkinningDemoWorld";
 const status = document.getElementById("status")!;
 // Todas as behaviours que o sistema for usar tem que ser registradas aqui devido
 // a falta de reflection de verdade depois da minificaçaõ, que caga os nomes das
@@ -59,18 +60,20 @@ async function main() {
   // await solarSystem.createWorld({aspect:canvas.width/canvas.height, fovy:45, near:0.1, far:100});
 
   let currentWorld:World;
-  
-  const textureVRWorld = new TextureStackVolumeRendererSynthetic(device);
-  textureVRWorld.createRenderPasses(canvas,  canvasFormat);
-  await textureVRWorld.createWorld({aspect:canvas.width/canvas.height, fovy:45, near:0.1, far:100});
+
+  //Boot no mundo de skinning (etapa atual do trabalho). Tem que casar com o
+  //currentWorld inicial do reducer, senão o loop detecta "troca" no 1º frame.
+  const bootWorld = new SkinningDemoWorld(device);
+  bootWorld.createRenderPasses(canvas,  canvasFormat);
+  await bootWorld.createWorld({aspect:canvas.width/canvas.height, fovy:45, near:0.1, far:100});
   //UI React no overlay por cima do canvas; recebe o mundo pra poder ler
   //o scene graph (usePolled). O outro canal, UI→engine, é o store redux.
   //mountUi monta o root React uma única vez; setUiWorld aponta a UI pro
   //mundo ativo — na troca, é só chamar de novo com o mundo novo.
   const setUiWorld = mountUi(document.getElementById("ui-root")!);
-  setUiWorld(textureVRWorld);
+  setUiWorld(bootWorld);
 
-  currentWorld = textureVRWorld;
+  currentWorld = bootWorld;
   //Loop de animação: o browser chama frame() a cada vsync (~60x/s),
   //passando um timestamp em ms. Cada chamada agenda a próxima.
   let lastTime = 0;
@@ -135,6 +138,12 @@ async function main() {
               trainWorld.createRenderPasses(canvas,  canvasFormat);
               await trainWorld.createWorld({aspect:canvas.width/canvas.height, fovy:45, near:0.1, far:100});
               currentWorld = trainWorld;
+              break;
+            case "SkinningDemo":
+              const skinningWorld = new SkinningDemoWorld(device);
+              skinningWorld.createRenderPasses(canvas,  canvasFormat);
+              await skinningWorld.createWorld({aspect:canvas.width/canvas.height, fovy:45, near:0.1, far:100});
+              currentWorld = skinningWorld;
               break;
          }
          setUiWorld(currentWorld);

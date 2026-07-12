@@ -78,7 +78,7 @@ const helloInitial: HelloState = {
 };
 
 const baseInitial: BaseState = {
-    currentWorld: "textureStackVolumeRenderSynthetic",
+    currentWorld: "SkinningDemo",
 };
 
 const textureBasedCTInitial: TextureBasedCTState = {
