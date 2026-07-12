@@ -18,6 +18,8 @@ import { TextureStackVolumeRendererCT } from "./textureStackVolumeRenderCT/textu
 import { StarshipDemoWorld } from "./StarshipDemo/StarshipDemoWorld";
 import { RaycastWorld } from "./raycast/raycastWorld";
 import { RaycastESSWorld } from "./raycastESS/raycastESSWorld";
+import { GameVolumeWorld } from "./gameVolume/gameVolumeWorld";
+import { TrainWorld } from "./train/trainWorld";
 const status = document.getElementById("status")!;
 // Todas as behaviours que o sistema for usar tem que ser registradas aqui devido
 // a falta de reflection de verdade depois da minificaçaõ, que caga os nomes das
@@ -121,6 +123,18 @@ async function main() {
               raycastESSWorld.createRenderPasses(canvas,  canvasFormat);
               await raycastESSWorld.createWorld({aspect:canvas.width/canvas.height, fovy:45, near:0.1, far:100});
               currentWorld = raycastESSWorld;
+              break;
+            case "gameVolume":
+              const gameVolumeWorld = new GameVolumeWorld(device);
+              gameVolumeWorld.createRenderPasses(canvas,  canvasFormat);
+              await gameVolumeWorld.createWorld({aspect:canvas.width/canvas.height, fovy:45, near:0.1, far:100});
+              currentWorld = gameVolumeWorld;
+              break;
+            case "train":
+              const trainWorld = new TrainWorld(device);
+              trainWorld.createRenderPasses(canvas,  canvasFormat);
+              await trainWorld.createWorld({aspect:canvas.width/canvas.height, fovy:45, near:0.1, far:100});
+              currentWorld = trainWorld;
               break;
          }
          setUiWorld(currentWorld);

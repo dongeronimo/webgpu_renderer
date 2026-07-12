@@ -330,7 +330,12 @@ export class MainRenderPass {
             label: "main pass depth",
             size: [width, height],
             format: DEPTH_FORMAT,
-            usage: GPUTextureUsage.RENDER_ATTACHMENT,
+            //TEXTURE_BINDING além de RENDER_ATTACHMENT: completa a capacidade que
+            //o depthStoreOp "store" já anunciava — um pass POSTERIOR (o
+            //SmokeVolumePass do gameVolume) amostra este depth pra ocluir o
+            //volume. Flag a mais é superset benigno: a StarshipDemo (que usa
+            //"discard") renderiza igual.
+            usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING,
         });
         this._colorView = this.colorTexture.createView();
         this._depthView = this.depthTexture.createView();

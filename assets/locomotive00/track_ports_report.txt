@@ -1,0 +1,398 @@
+== PECAS (28) ==
+railroad-corner-large.001  [corner]
+  mesh=Scene  origem_world=(-10.748, 48.483, -0.204)  escala=(0.027, 0.027, 0.027)
+  bbox_local x[-399.999, 48.727] y[0.000, 10.000] z[0.001, 448.727]
+  corner: entrada=y+0.000 saida=x-399.999 R=399.999 t0=(0.000, 1.000, 0.000) t1=(-1.000, -0.000, -0.000)
+  porta0_world=(-10.748, 48.483, -0.204)
+  porta1_world=(-10.748, 37.683, 10.596)
+railroad-corner-large.002  [corner]
+  mesh=Scene  origem_world=(0.100, -38.073, -0.218)  escala=(0.027, 0.027, 0.027)
+  bbox_local x[-399.999, 48.727] y[0.000, 10.000] z[0.001, 448.727]
+  corner: entrada=y+0.000 saida=x-399.999 R=399.999 t0=(0.000, 1.000, 0.000) t1=(-1.000, -0.000, -0.000)
+  porta0_world=(0.100, -38.073, -0.218)
+  porta1_world=(-10.700, -38.073, 10.582)
+railroad-corner-large.003  [corner]
+  mesh=Scene  origem_world=(-64.926, -48.907, -0.218)  escala=(0.027, 0.027, 0.027)
+  bbox_local x[-399.999, 48.727] y[0.000, 10.000] z[0.001, 448.727]
+  corner: entrada=y+0.000 saida=x-399.999 R=399.999 t0=(0.000, 1.000, 0.000) t1=(-1.000, -0.000, -0.000)
+  porta0_world=(-64.926, -48.907, -0.218)
+  porta1_world=(-64.926, -38.107, 10.582)
+railroad-corner-large.004  [corner]
+  mesh=Scene  origem_world=(-75.836, 37.685, -0.204)  escala=(0.027, 0.027, 0.027)
+  bbox_local x[-399.999, 48.727] y[0.000, 10.000] z[0.001, 448.727]
+  corner: entrada=y+0.000 saida=x-399.999 R=399.999 t0=(0.000, 1.000, 0.000) t1=(-1.000, -0.000, -0.000)
+  porta0_world=(-75.836, 37.685, -0.204)
+  porta1_world=(-65.036, 37.685, 10.596)
+railroad-straight  [straight]
+  mesh=Scene.001  origem_world=(0.065, 5.214, -0.214)  escala=(0.027, 0.027, 0.027)
+  bbox_local x[-50.000, 50.000] y[0.000, 10.000] z[0.000, 400.000]
+  straight: eixo longo local X
+  porta0_world=(-1.285, 5.214, -0.079)
+  porta1_world=(1.415, 5.214, -0.079)
+railroad-straight.001  [straight]
+  mesh=Scene.001  origem_world=(0.075, -5.607, -0.214)  escala=(0.027, 0.027, 0.027)
+  bbox_local x[-50.000, 50.000] y[0.000, 10.000] z[0.000, 400.000]
+  straight: eixo longo local X
+  porta0_world=(-1.275, -5.607, -0.079)
+  porta1_world=(1.425, -5.607, -0.079)
+railroad-straight.002  [straight]
+  mesh=Scene.001  origem_world=(0.075, -16.450, -0.214)  escala=(0.027, 0.027, 0.027)
+  bbox_local x[-50.000, 50.000] y[0.000, 10.000] z[0.000, 400.000]
+  straight: eixo longo local X
+  porta0_world=(-1.275, -16.450, -0.079)
+  porta1_world=(1.425, -16.450, -0.079)
+railroad-straight.003  [straight]
+  mesh=Scene.001  origem_world=(0.062, 37.647, -0.214)  escala=(0.027, 0.027, 0.027)
+  bbox_local x[-50.000, 50.000] y[0.000, 10.000] z[0.000, 400.000]
+  straight: eixo longo local X
+  porta0_world=(-1.288, 37.647, -0.079)
+  porta1_world=(1.412, 37.647, -0.079)
+railroad-straight.004  [straight]
+  mesh=Scene.001  origem_world=(0.062, 26.840, -0.214)  escala=(0.027, 0.027, 0.027)
+  bbox_local x[-50.000, 50.000] y[0.000, 10.000] z[0.000, 400.000]
+  straight: eixo longo local X
+  porta0_world=(-1.288, 26.840, -0.079)
+  porta1_world=(1.412, 26.840, -0.079)
+railroad-straight.005  [straight]
+  mesh=Scene.001  origem_world=(0.062, 16.025, -0.214)  escala=(0.027, 0.027, 0.027)
+  bbox_local x[-50.000, 50.000] y[0.000, 10.000] z[0.000, 400.000]
+  straight: eixo longo local X
+  porta0_world=(-1.288, 16.025, -0.079)
+  porta1_world=(1.412, 16.025, -0.079)
+railroad-straight.006  [straight]
+  mesh=Scene.001  origem_world=(0.075, -27.264, -0.214)  escala=(0.027, 0.027, 0.027)
+  bbox_local x[-50.000, 50.000] y[0.000, 10.000] z[0.000, 400.000]
+  straight: eixo longo local X
+  porta0_world=(-1.275, -27.264, -0.079)
+  porta1_world=(1.425, -27.264, -0.079)
+railroad-straight.007  [straight]
+  mesh=Scene.001  origem_world=(-75.732, 5.026, -0.214)  escala=(0.027, 0.027, 0.027)
+  bbox_local x[-50.000, 50.000] y[0.000, 10.000] z[0.000, 400.000]
+  straight: eixo longo local X
+  porta0_world=(-77.082, 5.026, -0.079)
+  porta1_world=(-74.382, 5.026, -0.079)
+railroad-straight.008  [straight]
+  mesh=Scene.001  origem_world=(-75.732, -5.760, -0.214)  escala=(0.027, 0.027, 0.027)
+  bbox_local x[-50.000, 50.000] y[0.000, 10.000] z[0.000, 400.000]
+  straight: eixo longo local X
+  porta0_world=(-77.082, -5.760, -0.079)
+  porta1_world=(-74.382, -5.760, -0.079)
+railroad-straight.009  [straight]
+  mesh=Scene.001  origem_world=(-75.732, -16.511, -0.214)  escala=(0.027, 0.027, 0.027)
+  bbox_local x[-50.000, 50.000] y[0.000, 10.000] z[0.000, 400.000]
+  straight: eixo longo local X
+  porta0_world=(-77.082, -16.511, -0.079)
+  porta1_world=(-74.382, -16.511, -0.079)
+railroad-straight.010  [straight]
+  mesh=Scene.001  origem_world=(-75.754, 37.706, -0.214)  escala=(0.027, 0.027, 0.027)
+  bbox_local x[-50.000, 50.000] y[0.000, 10.000] z[0.000, 400.000]
+  straight: eixo longo local X
+  porta0_world=(-77.104, 37.706, -0.079)
+  porta1_world=(-74.404, 37.706, -0.079)
+railroad-straight.011  [straight]
+  mesh=Scene.001  origem_world=(-75.723, 26.713, -0.214)  escala=(0.027, 0.027, 0.027)
+  bbox_local x[-50.000, 50.000] y[0.000, 10.000] z[0.000, 400.000]
+  straight: eixo longo local X
+  porta0_world=(-77.073, 26.713, -0.079)
+  porta1_world=(-74.373, 26.713, -0.079)
+railroad-straight.012  [straight]
+  mesh=Scene.001  origem_world=(-75.727, 15.873, -0.214)  escala=(0.027, 0.027, 0.027)
+  bbox_local x[-50.000, 50.000] y[0.000, 10.000] z[0.000, 400.000]
+  straight: eixo longo local X
+  porta0_world=(-77.077, 15.873, -0.079)
+  porta1_world=(-74.377, 15.873, -0.079)
+railroad-straight.013  [straight]
+  mesh=Scene.001  origem_world=(-75.742, -27.357, -0.214)  escala=(0.027, 0.027, 0.027)
+  bbox_local x[-50.000, 50.000] y[0.000, 10.000] z[0.000, 400.000]
+  straight: eixo longo local X
+  porta0_world=(-77.092, -27.357, -0.079)
+  porta1_world=(-74.392, -27.357, -0.079)
+railroad-straight.014  [straight]
+  mesh=Scene.001  origem_world=(-21.414, -48.879, -0.214)  escala=(0.027, 0.027, 0.027)
+  bbox_local x[-50.000, 50.000] y[0.000, 10.000] z[0.000, 400.000]
+  straight: eixo longo local X
+  porta0_world=(-21.414, -50.229, -0.079)
+  porta1_world=(-21.414, -47.529, -0.079)
+railroad-straight.015  [straight]
+  mesh=Scene.001  origem_world=(-32.243, -48.892, -0.214)  escala=(0.027, 0.027, 0.027)
+  bbox_local x[-50.000, 50.000] y[0.000, 10.000] z[0.000, 400.000]
+  straight: eixo longo local X
+  porta0_world=(-32.243, -50.242, -0.079)
+  porta1_world=(-32.243, -47.542, -0.079)
+railroad-straight.016  [straight]
+  mesh=Scene.001  origem_world=(-43.112, -48.892, -0.214)  escala=(0.027, 0.027, 0.027)
+  bbox_local x[-50.000, 50.000] y[0.000, 10.000] z[0.000, 400.000]
+  straight: eixo longo local X
+  porta0_world=(-43.112, -50.242, -0.079)
+  porta1_world=(-43.112, -47.542, -0.079)
+railroad-straight.017  [straight]
+  mesh=Scene.001  origem_world=(-54.001, -48.892, -0.214)  escala=(0.027, 0.027, 0.027)
+  bbox_local x[-50.000, 50.000] y[0.000, 10.000] z[0.000, 400.000]
+  straight: eixo longo local X
+  porta0_world=(-54.001, -50.242, -0.079)
+  porta1_world=(-54.001, -47.542, -0.079)
+railroad-straight.018  [straight]
+  mesh=Scene.001  origem_world=(-64.891, -48.892, -0.214)  escala=(0.027, 0.027, 0.027)
+  bbox_local x[-50.000, 50.000] y[0.000, 10.000] z[0.000, 400.000]
+  straight: eixo longo local X
+  porta0_world=(-64.891, -50.242, -0.079)
+  porta1_world=(-64.891, -47.542, -0.079)
+railroad-straight.019  [straight]
+  mesh=Scene.001  origem_world=(-21.602, 48.483, -0.214)  escala=(0.027, 0.027, 0.027)
+  bbox_local x[-50.000, 50.000] y[0.000, 10.000] z[0.000, 400.000]
+  straight: eixo longo local X
+  porta0_world=(-21.602, 47.133, -0.079)
+  porta1_world=(-21.602, 49.833, -0.079)
+railroad-straight.020  [straight]
+  mesh=Scene.001  origem_world=(-32.459, 48.488, -0.214)  escala=(0.027, 0.027, 0.027)
+  bbox_local x[-50.000, 50.000] y[0.000, 10.000] z[0.000, 400.000]
+  straight: eixo longo local X
+  porta0_world=(-32.459, 47.138, -0.079)
+  porta1_world=(-32.459, 49.838, -0.079)
+railroad-straight.021  [straight]
+  mesh=Scene.001  origem_world=(-43.306, 48.487, -0.214)  escala=(0.027, 0.027, 0.027)
+  bbox_local x[-50.000, 50.000] y[0.000, 10.000] z[0.000, 400.000]
+  straight: eixo longo local X
+  porta0_world=(-43.306, 47.137, -0.079)
+  porta1_world=(-43.306, 49.837, -0.079)
+railroad-straight.022  [straight]
+  mesh=Scene.001  origem_world=(-54.188, 48.475, -0.214)  escala=(0.027, 0.027, 0.027)
+  bbox_local x[-50.000, 50.000] y[0.000, 10.000] z[0.000, 400.000]
+  straight: eixo longo local X
+  porta0_world=(-54.188, 47.125, -0.079)
+  porta1_world=(-54.188, 49.825, -0.079)
+railroad-straight.023  [straight]
+  mesh=Scene.001  origem_world=(-65.049, 48.473, -0.214)  escala=(0.027, 0.027, 0.027)
+  bbox_local x[-50.000, 50.000] y[0.000, 10.000] z[0.000, 400.000]
+  straight: eixo longo local X
+  porta0_world=(-65.049, 47.123, -0.079)
+  porta1_world=(-65.049, 49.823, -0.079)
+
+== VIZINHOS DE CADA PORTA (3 mais proximos de outra peca) ==
+railroad-corner-large.001 porta0: nao-mutuo
+    -> railroad-straight.019  d=10.9382
+    -> railroad-straight.019  d=10.9382
+    -> railroad-straight.003  d=14.3859
+railroad-corner-large.001 porta1: nao-mutuo
+    -> railroad-straight.003  d=14.2639
+    -> railroad-straight.003  d=16.1813
+    -> railroad-straight.004  d=17.9175
+railroad-corner-large.002 porta0: nao-mutuo
+    -> railroad-straight.006  d=10.8910
+    -> railroad-straight.006  d=10.8972
+    -> railroad-straight.002  d=21.6646
+railroad-corner-large.002 porta1: nao-mutuo
+    -> railroad-straight.014  d=17.8287
+    -> railroad-straight.006  d=17.8695
+    -> railroad-straight.014  d=19.3963
+railroad-corner-large.003 porta0: MUTUO
+    -> railroad-straight.018  d=1.3422
+    -> railroad-straight.018  d=1.3730
+    -> railroad-straight.017  d=11.0069
+railroad-corner-large.003 porta1: nao-mutuo
+    -> railroad-straight.018  d=14.2359
+    -> railroad-straight.018  d=16.1523
+    -> railroad-straight.013  d=17.8556
+railroad-corner-large.004 porta0: MUTUO
+    -> railroad-straight.010  d=1.2739
+    -> railroad-straight.010  d=1.4380
+    -> railroad-straight.011  d=11.0419
+railroad-corner-large.004 porta1: nao-mutuo
+    -> railroad-straight.010  d=14.2024
+    -> railroad-straight.023  d=14.2487
+    -> railroad-straight.010  d=16.1116
+railroad-straight porta0: MUTUO
+    -> railroad-straight.005  d=10.8105
+    -> railroad-straight.001  d=10.8215
+    -> railroad-straight.005  d=11.1420
+railroad-straight porta1: MUTUO
+    -> railroad-straight.005  d=10.8105
+    -> railroad-straight.001  d=10.8215
+    -> railroad-straight.005  d=11.1432
+railroad-straight.001 porta0: nao-mutuo
+    -> railroad-straight  d=10.8215
+    -> railroad-straight.002  d=10.8426
+    -> railroad-straight  d=11.1508
+railroad-straight.001 porta1: nao-mutuo
+    -> railroad-straight  d=10.8215
+    -> railroad-straight.002  d=10.8426
+    -> railroad-straight  d=11.1557
+railroad-straight.002 porta0: MUTUO
+    -> railroad-straight.006  d=10.8144
+    -> railroad-straight.001  d=10.8426
+    -> railroad-straight.006  d=11.1463
+railroad-straight.002 porta1: MUTUO
+    -> railroad-straight.006  d=10.8144
+    -> railroad-straight.001  d=10.8426
+    -> railroad-straight.006  d=11.1463
+railroad-straight.003 porta0: MUTUO
+    -> railroad-straight.004  d=10.8065
+    -> railroad-straight.004  d=11.1387
+    -> railroad-corner-large.001  d=14.2639
+railroad-straight.003 porta1: MUTUO
+    -> railroad-straight.004  d=10.8065
+    -> railroad-straight.004  d=11.1387
+    -> railroad-corner-large.001  d=16.1813
+railroad-straight.004 porta0: MUTUO
+    -> railroad-straight.003  d=10.8065
+    -> railroad-straight.005  d=10.8152
+    -> railroad-straight.003  d=11.1387
+railroad-straight.004 porta1: MUTUO
+    -> railroad-straight.003  d=10.8065
+    -> railroad-straight.005  d=10.8152
+    -> railroad-straight.003  d=11.1387
+railroad-straight.005 porta0: MUTUO
+    -> railroad-straight  d=10.8105
+    -> railroad-straight.004  d=10.8152
+    -> railroad-straight  d=11.1432
+railroad-straight.005 porta1: MUTUO
+    -> railroad-straight  d=10.8105
+    -> railroad-straight.004  d=10.8152
+    -> railroad-straight  d=11.1420
+railroad-straight.006 porta0: MUTUO
+    -> railroad-straight.002  d=10.8144
+    -> railroad-corner-large.002  d=10.8972
+    -> railroad-straight.002  d=11.1463
+railroad-straight.006 porta1: MUTUO
+    -> railroad-straight.002  d=10.8144
+    -> railroad-corner-large.002  d=10.8910
+    -> railroad-straight.002  d=11.1463
+railroad-straight.007 porta0: nao-mutuo
+    -> railroad-straight.008  d=10.7865
+    -> railroad-straight.012  d=10.8470
+    -> railroad-straight.008  d=11.1193
+railroad-straight.007 porta1: nao-mutuo
+    -> railroad-straight.008  d=10.7865
+    -> railroad-straight.012  d=10.8470
+    -> railroad-straight.008  d=11.1193
+railroad-straight.008 porta0: MUTUO
+    -> railroad-straight.009  d=10.7502
+    -> railroad-straight.007  d=10.7865
+    -> railroad-straight.009  d=11.0841
+railroad-straight.008 porta1: MUTUO
+    -> railroad-straight.009  d=10.7502
+    -> railroad-straight.007  d=10.7865
+    -> railroad-straight.009  d=11.0841
+railroad-straight.009 porta0: MUTUO
+    -> railroad-straight.008  d=10.7502
+    -> railroad-straight.013  d=10.8466
+    -> railroad-straight.008  d=11.0841
+railroad-straight.009 porta1: MUTUO
+    -> railroad-straight.008  d=10.7502
+    -> railroad-straight.013  d=10.8466
+    -> railroad-straight.008  d=11.0841
+railroad-straight.010 porta0: MUTUO
+    -> railroad-corner-large.004  d=1.2739
+    -> railroad-straight.011  d=10.9931
+    -> railroad-straight.011  d=11.3270
+railroad-straight.010 porta1: nao-mutuo
+    -> railroad-corner-large.004  d=1.4380
+    -> railroad-straight.011  d=10.9931
+    -> railroad-straight.011  d=11.3126
+railroad-straight.011 porta0: MUTUO
+    -> railroad-straight.012  d=10.8403
+    -> railroad-straight.010  d=10.9931
+    -> railroad-corner-large.004  d=11.0419
+railroad-straight.011 porta1: MUTUO
+    -> railroad-straight.012  d=10.8403
+    -> railroad-straight.010  d=10.9931
+    -> railroad-corner-large.004  d=11.0693
+railroad-straight.012 porta0: MUTUO
+    -> railroad-straight.011  d=10.8403
+    -> railroad-straight.007  d=10.8470
+    -> railroad-straight.011  d=11.1724
+railroad-straight.012 porta1: MUTUO
+    -> railroad-straight.011  d=10.8403
+    -> railroad-straight.007  d=10.8470
+    -> railroad-straight.011  d=11.1706
+railroad-straight.013 porta0: nao-mutuo
+    -> railroad-straight.009  d=10.8466
+    -> railroad-straight.009  d=11.1801
+    -> railroad-corner-large.003  d=19.4224
+railroad-straight.013 porta1: nao-mutuo
+    -> railroad-straight.009  d=10.8466
+    -> railroad-straight.009  d=11.1752
+    -> railroad-corner-large.003  d=17.8556
+railroad-straight.014 porta0: MUTUO
+    -> railroad-straight.015  d=10.8282
+    -> railroad-straight.015  d=11.1568
+    -> railroad-corner-large.002  d=19.3963
+railroad-straight.014 porta1: MUTUO
+    -> railroad-straight.015  d=10.8282
+    -> railroad-straight.015  d=11.1626
+    -> railroad-corner-large.002  d=17.8287
+railroad-straight.015 porta0: MUTUO
+    -> railroad-straight.014  d=10.8282
+    -> railroad-straight.016  d=10.8692
+    -> railroad-straight.014  d=11.1626
+railroad-straight.015 porta1: MUTUO
+    -> railroad-straight.014  d=10.8282
+    -> railroad-straight.016  d=10.8692
+    -> railroad-straight.014  d=11.1568
+railroad-straight.016 porta0: nao-mutuo
+    -> railroad-straight.015  d=10.8692
+    -> railroad-straight.017  d=10.8892
+    -> railroad-straight.015  d=11.1995
+railroad-straight.016 porta1: nao-mutuo
+    -> railroad-straight.015  d=10.8692
+    -> railroad-straight.017  d=10.8892
+    -> railroad-straight.015  d=11.1995
+railroad-straight.017 porta0: nao-mutuo
+    -> railroad-straight.016  d=10.8892
+    -> railroad-straight.018  d=10.8903
+    -> railroad-corner-large.003  d=11.0069
+railroad-straight.017 porta1: nao-mutuo
+    -> railroad-straight.016  d=10.8892
+    -> railroad-straight.018  d=10.8903
+    -> railroad-corner-large.003  d=11.0107
+railroad-straight.018 porta0: MUTUO
+    -> railroad-corner-large.003  d=1.3422
+    -> railroad-straight.017  d=10.8903
+    -> railroad-straight.017  d=11.2200
+railroad-straight.018 porta1: nao-mutuo
+    -> railroad-corner-large.003  d=1.3730
+    -> railroad-straight.017  d=10.8903
+    -> railroad-straight.017  d=11.2200
+railroad-straight.019 porta0: nao-mutuo
+    -> railroad-straight.020  d=10.8573
+    -> railroad-corner-large.001  d=10.9382
+    -> railroad-straight.020  d=11.1890
+railroad-straight.019 porta1: nao-mutuo
+    -> railroad-straight.020  d=10.8573
+    -> railroad-corner-large.001  d=10.9382
+    -> railroad-straight.020  d=11.1869
+railroad-straight.020 porta0: MUTUO
+    -> railroad-straight.021  d=10.8468
+    -> railroad-straight.019  d=10.8573
+    -> railroad-straight.021  d=11.1776
+railroad-straight.020 porta1: MUTUO
+    -> railroad-straight.021  d=10.8468
+    -> railroad-straight.019  d=10.8573
+    -> railroad-straight.021  d=11.1780
+railroad-straight.021 porta0: MUTUO
+    -> railroad-straight.020  d=10.8468
+    -> railroad-straight.022  d=10.8817
+    -> railroad-straight.020  d=11.1780
+railroad-straight.021 porta1: MUTUO
+    -> railroad-straight.020  d=10.8468
+    -> railroad-straight.022  d=10.8817
+    -> railroad-straight.020  d=11.1776
+railroad-straight.022 porta0: MUTUO
+    -> railroad-straight.023  d=10.8611
+    -> railroad-straight.021  d=10.8817
+    -> railroad-straight.023  d=11.1910
+railroad-straight.022 porta1: MUTUO
+    -> railroad-straight.023  d=10.8611
+    -> railroad-straight.021  d=10.8817
+    -> railroad-straight.023  d=11.1923
+railroad-straight.023 porta0: MUTUO
+    -> railroad-straight.022  d=10.8611
+    -> railroad-straight.022  d=11.1923
+    -> railroad-straight.010  d=13.2731
+railroad-straight.023 porta1: MUTUO
+    -> railroad-straight.022  d=10.8611
+    -> railroad-straight.022  d=11.1910
+    -> railroad-straight.010  d=15.3073
+
+== ORIGENS COINCIDENTES (possiveis duplicatas empilhadas) ==
+nenhuma

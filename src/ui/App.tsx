@@ -19,6 +19,7 @@ import { FloatingPanel } from "./generic/FloatingPanel";
 import { GpuStats } from "./GpuStats";
 import { RaycastWorld } from "../raycast/raycastWorld";
 import { RaycastESSWorld } from "../raycastESS/raycastESSWorld";
+import { GameVolumeWorld } from "../gameVolume/gameVolumeWorld";
 import { OrbitControls } from "./OrbitControls";
 import RaycastRenderProperties from "./raycast/raycastRenderProperties";
 import RaycastESSRenderProperties from "./raycast_ess/raycastESSRenderProperties";
@@ -109,7 +110,8 @@ export function App({ world }: { world: World }) {
                pinta atrás dos painéis, então drag/scroll no vazio orbitam e
                nos painéis continuam sendo do painel. Só nos mundos que orbitam
                (baseline + ESS, ambos com a OrbitCameraBehaviour).*/}
-            {(world instanceof RaycastWorld || world instanceof RaycastESSWorld) && <OrbitControls />}
+            {(world instanceof RaycastWorld || world instanceof RaycastESSWorld
+                || world instanceof GameVolumeWorld) && <OrbitControls />}
             {/*Editor de CTF: painel próprio, nos mundos que consomem o state ctf
                (CT + os raycasters). A CTF é da modalidade, então o mesmo editor
                serve os três — e editar aqui estressa o recálculo do skip-map.*/}

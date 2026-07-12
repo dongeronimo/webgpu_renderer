@@ -55,7 +55,8 @@ export type GradientMode = "precalculated" | "on-the-fly";
  * RenderPassBit: typo morre em compile time. Cresce junto com os mundos.
  */
 export type WorldName = "solarSystem" | "textureStackVolumeRenderSynthetic" |
-"textureStackVolumeRenderCT" | "StarshipDemo" | "raycast" | "raycastESS";
+"textureStackVolumeRenderCT" | "StarshipDemo" | "raycast" | "raycastESS" |
+"gameVolume" | "train";
 
 export interface HelloClickedAction {
     type: typeof HELLO_CLICKED;

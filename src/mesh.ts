@@ -10,6 +10,7 @@
 //
 //Os índices são sempre uint32 (o loader converte u8/u16 na carga), então
 //o indexFormat é fixo.
+import { vec3, type Vec3 } from "wgpu-matrix";
 
 export enum MeshType {
   Static,
@@ -28,6 +29,14 @@ export abstract class Mesh {
   readonly indexCount: number;
   readonly indexFormat: GPUIndexFormat = "uint32";
 
+  //AABB LOCAL (espaço de modelo), calculado dos vértices no construtor. A
+  //posição está no offset 0 de TODO formato (Static/Skinned/Slice), então o
+  //cálculo é o mesmo pra todos. Infra de engine: frustum culling, GI, e a
+  //voxelização de obstáculo do fluido. Para o AABB de MUNDO, ver
+  //Renderable.worldAABB (transforma estes cantos pela worldMatrix do nó).
+  readonly boundsMin: Vec3;
+  readonly boundsMax: Vec3;
+
   //vertexData já vem intercalado no formato da subclasse.
   //mappedAtCreation evita um writeBuffer na queue: o buffer nasce mapeado,
   //copiamos os bytes e desmapeamos.
@@ -44,6 +53,20 @@ export abstract class Mesh {
     this.name = name;
     this.vertexCount = vertexData.byteLength / bytesPerVertex;
     this.indexCount = indices.length;
+
+    //AABB local: varre as posições (offset 0, stride = bytesPerVertex).
+    const floats = new Float32Array(vertexData);
+    const strideF = bytesPerVertex / 4;
+    let minX = Infinity, minY = Infinity, minZ = Infinity;
+    let maxX = -Infinity, maxY = -Infinity, maxZ = -Infinity;
+    for (let i = 0; i < this.vertexCount; i++) {
+      const o = i * strideF;
+      const x = floats[o], y = floats[o + 1], z = floats[o + 2];
+      if (x < minX) minX = x; if (y < minY) minY = y; if (z < minZ) minZ = z;
+      if (x > maxX) maxX = x; if (y > maxY) maxY = y; if (z > maxZ) maxZ = z;
+    }
+    this.boundsMin = vec3.create(minX, minY, minZ);
+    this.boundsMax = vec3.create(maxX, maxY, maxZ);
 
     this.vertexBuffer = device.createBuffer({
       label: `${name} (vertices)`,

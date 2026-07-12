@@ -11,4 +11,6 @@ export const worldLabels: Record<WorldName, string> = {
     StarshipDemo : "Starship (demo)",
     raycast: "Raycaster",
     raycastESS: "Raycaster (ESS)",
+    gameVolume: "Volume + Jogo (oclusão)",
+    train: "Trem (ferrorama)",
 };
