@@ -1,0 +1,1 @@
+Security guarda as peças de segurança da app. Segurança é usada pela Interface mas não é da Interface, ela é algo suficientemente importante pra ser uma peça propria

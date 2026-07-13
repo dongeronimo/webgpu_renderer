@@ -1,0 +1,1 @@
+Os endpoint rest ficarão aqui. No momento não há endpoint algum pq to usando os endpoints default de login do spring security.

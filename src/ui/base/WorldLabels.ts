@@ -14,4 +14,5 @@ export const worldLabels: Record<WorldName, string> = {
     gameVolume: "Volume + Jogo (oclusão)",
     train: "Trem (ferrorama)",
     SkinningDemo : "Skinning (xbot)",
+    gauntlet: "Gauntlet (multiplayer)",
 };

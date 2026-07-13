@@ -9,5 +9,10 @@ export default defineConfig({
     //Sem PORT cai no default 5173. Linha idêntica em todos os branches p/ não conflitar em merge.
     server: {
         port: Number(process.env.PORT) || 5173,
+         proxy: {
+      "/ws":     { target: "ws://localhost:8080", ws: true },
+      "/login":  { target: "http://localhost:8080", changeOrigin: false },
+      "/logout": { target: "http://localhost:8080", changeOrigin: false },
+        }
     },
 });

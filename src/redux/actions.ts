@@ -57,7 +57,7 @@ export type GradientMode = "precalculated" | "on-the-fly";
 export type WorldName = "solarSystem" | "textureStackVolumeRenderSynthetic" |
 "textureStackVolumeRenderCT" | "StarshipDemo" | "raycast" | "raycastESS" |
 "gameVolume" | "train" |
-"textureStackVolumeRenderCT" | "StarshipDemo" | "SkinningDemo";
+"textureStackVolumeRenderCT" | "StarshipDemo" | "SkinningDemo" | "gauntlet";
 
 export interface HelloClickedAction {
     type: typeof HELLO_CLICKED;

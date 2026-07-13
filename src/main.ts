@@ -21,6 +21,7 @@ import { RaycastESSWorld } from "./raycastESS/raycastESSWorld";
 import { GameVolumeWorld } from "./gameVolume/gameVolumeWorld";
 import { TrainWorld } from "./train/trainWorld";
 import { SkinningDemoWorld } from "./skinning/SkinningDemoWorld";
+import { GauntletWorld } from "./gauntlet/gauntletWorld";
 const status = document.getElementById("status")!;
 // Todas as behaviours que o sistema for usar tem que ser registradas aqui devido
 // a falta de reflection de verdade depois da minificaçaõ, que caga os nomes das
@@ -144,6 +145,12 @@ async function main() {
               skinningWorld.createRenderPasses(canvas,  canvasFormat);
               await skinningWorld.createWorld({aspect:canvas.width/canvas.height, fovy:45, near:0.1, far:100});
               currentWorld = skinningWorld;
+              break;
+            case "gauntlet":
+              const gauntletWorld = new GauntletWorld(device);
+              gauntletWorld.createRenderPasses(canvas,  canvasFormat);
+              await gauntletWorld.createWorld({aspect:canvas.width/canvas.height, fovy:45, near:0.1, far:100});
+              currentWorld = gauntletWorld;
               break;
          }
          setUiWorld(currentWorld);
