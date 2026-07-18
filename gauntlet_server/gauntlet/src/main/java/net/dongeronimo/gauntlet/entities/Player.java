@@ -11,6 +11,7 @@ public class Player {
     //Optional.of(null) num setter lança NPE.
     private String websocketId;
 
+    
     public Player(long id, String name, String password) {
         this.id = id;
         this.name = name;
@@ -42,6 +43,26 @@ public class Player {
     }
     public void setWebsocketId(String websocketId) {
         this.websocketId = websocketId;
+    }
+    @Override
+    public int hashCode() {
+        final int prime = 31;
+        int result = 1;
+        result = prime * result + (int) (id ^ (id >>> 32));
+        return result;
+    }
+    @Override
+    public boolean equals(Object obj) {
+        if (this == obj)
+            return true;
+        if (obj == null)
+            return false;
+        if (getClass() != obj.getClass())
+            return false;
+        Player other = (Player) obj;
+        if (id != other.id)
+            return false;
+        return true;
     }
 
 }

@@ -24,6 +24,9 @@ import { OrbitControls } from "./OrbitControls";
 import RaycastRenderProperties from "./raycast/raycastRenderProperties";
 import RaycastESSRenderProperties from "./raycast_ess/raycastESSRenderProperties";
 import { CtfEditorPanel } from "./ctf/CtfEditorPanel";
+import { GauntletWorld } from "../gauntlet/gauntletWorld";
+import { GauntletLoginPanel } from "./gauntlet/GauntletLoginPanel";
+import RaycastESSToDos from "./raycast_ess/raycastESSToDos";
 
 export function TerraPositionTable({ world }: { world: World }) {
     //Snapshot da translação global (colunas 12/13/14 da worldMatrix) —
@@ -93,7 +96,15 @@ function WorldUi({ world }: { world: World }) {
         return <RaycastRenderProperties />;
     }
     if (world instanceof RaycastESSWorld) {
-        return <RaycastESSRenderProperties/>
+        return (
+            <div>
+                <RaycastESSRenderProperties/>
+                <RaycastESSToDos/>
+            </div>
+        )
+    }
+    if (world instanceof GauntletWorld) {
+        return <GauntletLoginPanel />;
     }
     //mundo sem UI própria: fica só o WorldSwitch na tela
     return null;
@@ -111,6 +122,7 @@ export function App({ world }: { world: World }) {
                nos painéis continuam sendo do painel. Só nos mundos que orbitam
                (baseline + ESS, ambos com a OrbitCameraBehaviour).*/}
             {(world instanceof RaycastWorld || world instanceof RaycastESSWorld
+                || world instanceof GauntletWorld //gambi temporária pra eu ter orbit control no multiplayer
                 || world instanceof GameVolumeWorld) && <OrbitControls />}
             {/*Editor de CTF: painel próprio, nos mundos que consomem o state ctf
                (CT + os raycasters). A CTF é da modalidade, então o mesmo editor

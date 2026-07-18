@@ -34,7 +34,11 @@ public class InstancePersistence {
     }
 
     public List<Instance> getInstancesWithEmptySlots(){
-        return gInstances.stream().filter(instance->instance.getPlayerCount() < 4).toList();
+        //Join só seleciona RUNNING: instância CLOSING/DEAD não recebe ninguém.
+        return gInstances.stream()
+            .filter(instance -> instance.getState() == Instance.State.RUNNING
+                && instance.getPlayerCount() < 4)
+            .toList();
     }
 
     /**
@@ -45,5 +49,8 @@ public class InstancePersistence {
         return gInstances.stream()
         .filter(i->i.getPlayers() != null && i.getPlayers().contains(player))
         .findFirst();
+    }
+    public void destroy(Instance instance) {
+        gInstances.remove(instance);
     }
 }

@@ -45,6 +45,13 @@ export const SET_RAYCAST_ESS = "SET_RAYCAST_ESS";
 //PiP de debug do ESS: liga/desliga o quadzinho com os cubos dos chunks mantidos.
 //Gateia PASSES de render (lido no render() do world), não é estado de nó.
 export const SET_RAYCAST_ESS_DEBUG = "SET_RAYCAST_ESS_DEBUG";
+//Gauntlet: o form de login (UI) fez o POST /login e o server aceitou — a
+//credencial REAL daqui em diante é o cookie de sessão, não user/senha (por
+//isso a senha nunca entra no state: nenhum consumidor precisa dela depois
+//do fetch, e o devtools do redux mostra o store inteiro). A
+//GauntletNetworkBehaviour lê a flag no update() e dispara signaling+game.
+export const GAUNTLET_LOGIN_SUCCEEDED = "GAUNTLET_LOGIN_SUCCEEDED";
+
 //Como o gradiente é obtido. "precalculated": uma textura 3D de gradientes
 //gerada uma vez (rápido no raymarch, custa VRAM e um pré-passo). "on-the-fly":
 //diferenças centrais amostradas no próprio shader a cada passo (zero memória
@@ -130,6 +137,12 @@ export interface SetRaycastEssDebugAction {
     payload: boolean;
 }
 
+export interface GauntletLoginSucceededAction {
+    type: typeof GAUNTLET_LOGIN_SUCCEEDED;
+    /** Quem logou — pra UI exibir e pro futuro HUD; a credencial é o cookie. */
+    payload: { username: string };
+}
+
 export function helloClicked(): HelloClickedAction {
     return { type: HELLO_CLICKED };
 }
@@ -186,6 +199,10 @@ export function setRaycastEssDebugView(enabled: boolean): SetRaycastEssDebugActi
     return { type: SET_RAYCAST_ESS_DEBUG, payload: enabled };
 }
 
+export function gauntletLoginSucceeded(username: string): GauntletLoginSucceededAction {
+    return { type: GAUNTLET_LOGIN_SUCCEEDED, payload: { username } };
+}
+
 //União de todas as actions da app — cresce conforme a UI cresce. TODO
 //reducer é tipado com ela: no redux, todo reducer recebe TODA action e
 //ignora (default) as que não conhece.
@@ -203,4 +220,5 @@ export type AppAction =
     | SetRaycastGradientModeAction
     | SetRaycastFramebufferScaleAction
     | SetRaycastEssAction
-    | SetRaycastEssDebugAction;
+    | SetRaycastEssDebugAction
+    | GauntletLoginSucceededAction;

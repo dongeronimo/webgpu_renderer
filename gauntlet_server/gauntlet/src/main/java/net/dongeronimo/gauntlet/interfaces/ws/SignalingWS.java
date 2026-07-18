@@ -17,6 +17,7 @@ import net.dongeronimo.gauntlet.interfaces.transferObjects.ServerMessage;
 import net.dongeronimo.gauntlet.persistence.PlayerPersistence;
 import net.dongeronimo.gauntlet.services.InstanceService;
 import net.dongeronimo.gauntlet.services.JoinResult;
+import net.dongeronimo.gauntlet.services.MapGenerator;
 import tools.jackson.core.JacksonException;
 import tools.jackson.databind.ObjectMapper;
 
@@ -40,7 +41,7 @@ public class SignalingWS extends TextWebSocketHandler {
     private InstanceService instanceService;
 
     public SignalingWS(PlayerPersistence playerPersistence, 
-        ObjectMapper objMapper,
+        ObjectMapper objMapper, MapGenerator mapGenerator,
         InstanceService instanceService) {
         this.playerPersistence = playerPersistence;
         this.objectMapper = objMapper;

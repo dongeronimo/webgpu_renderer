@@ -135,7 +135,37 @@ export class SkinnedRenderPass {
 
     render(encoder: GPUCommandEncoder, root: Node, width: number, height: number): void {
         this.ensureTargets(width, height);
+        this.draw(encoder, root, this._colorView!, this._depthView!, width, height, this.colorLoadOp, "clear");
+    }
 
+    /**
+     * Desenha no alvo de OUTRO pass (ex.: o mainPass do dungeon) em vez da
+     * textura própria — color E depth em "load": respeita o que já foi
+     * desenhado (senão o chão/paredes, se vierem depois, cobririam os
+     * avatares) e testa profundidade contra a geometria não-skinnada já
+     * presente. Os formatos batem (ambos depth24plus) — ver DEPTH_FORMAT.
+     */
+    renderOnto(
+        encoder: GPUCommandEncoder,
+        root: Node,
+        colorView: GPUTextureView,
+        depthView: GPUTextureView,
+        width: number,
+        height: number,
+    ): void {
+        this.draw(encoder, root, colorView, depthView, width, height, "load", "load");
+    }
+
+    private draw(
+        encoder: GPUCommandEncoder,
+        root: Node,
+        colorView: GPUTextureView,
+        depthView: GPUTextureView,
+        width: number,
+        height: number,
+        colorLoadOp: GPULoadOp,
+        depthLoadOp: GPULoadOp,
+    ): void {
         //---- 1. agrupamento ----
         const items: DrawItem[] = [];
         let cameraNode: Node | null = null;
@@ -219,15 +249,15 @@ export class SkinnedRenderPass {
             timestampWrites: gpuTimer.timestampWrites("mesh"),
             colorAttachments: [
                 {
-                    view: this._colorView!,
-                    loadOp: this.colorLoadOp,
+                    view: colorView,
+                    loadOp: colorLoadOp,
                     clearValue: { r: 0.39, g: 0.58, b: 0.93, a: 1 }, //cornflower blue
                     storeOp: "store",
                 },
             ],
             depthStencilAttachment: {
-                view: this._depthView!,
-                depthLoadOp: "clear",
+                view: depthView,
+                depthLoadOp,
                 depthClearValue: 1.0,
                 depthStoreOp: this.depthStoreOp,
             },
