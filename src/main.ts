@@ -44,7 +44,7 @@ async function main() {
   console.log("Adapter info:", info);
   console.log("Limits:", device.limits);
   //Registra as behaviours, tem que fazer essa gambi pq n tem reflection de verdade depois da minificaçao
-  registerBehaviours();
+  registerBehaviours(); //obsoleto, ta nos Worlds agora
 
   //A queue roda os comandos
   const queue = device.queue;

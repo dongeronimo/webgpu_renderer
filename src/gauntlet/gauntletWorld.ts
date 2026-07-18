@@ -12,7 +12,7 @@ import { FinalRenderPass } from "../finalPass";
 import { World } from "../world";
 import { Node } from "../node";
 import { Mesh } from "../mesh";
-import { Renderable, RenderPassBit } from "../renderable";
+import {  RenderPassBit } from "../renderable";
 import { Light } from "../Light";
 import { loadGltf } from "../gltfLoader";
 import { registerMaterial } from "../material";
