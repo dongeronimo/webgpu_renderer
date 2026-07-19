@@ -7,25 +7,13 @@ import { store } from "../redux/store";
 import type { EntityDto, GameServerMessage, MapSyncMessage } from "./dto/ServerMessage";
 import { destroyInstance } from "../prefab";
 import MineAvatarBehaviour from "./MineAvatarBehaviour";
-import OtherAvatarBehaviour from "./OtherAvatarBehaviour";
+import NetworkedEntityBehaviour from "./NetworkedEntityBehaviour";
 import CameraFollowBehaviour from "./CameraFollowBehaviour";
 
 //yaw chega do server em RADIANOS (Math.atan2 java); node.eulerAngles do
 //client quer GRAUS (ver node.ts, quat.fromEuler) — a conversão mora aqui,
 //não do lado do server, que não devia saber nada de convenção de client.
 const RAD_TO_DEG = 180 / Math.PI;
-
-//Fração do erro (predição local ou dead reckoning dos remotos) corrigida a
-//CADA snap (20 Hz), em vez de teleportar pro valor do server. Sem
-//rewind/replay de input — um puxão pequeno a cada 50ms é imperceptível.
-const SNAP_BLEND = 0.35;
-
-//lerp de ângulo em GRAUS pelo caminho mais curto — evita girar 350° quando
-//o alvo tá a 10° de distância do outro lado da costura -180/180.
-function lerpAngleDeg(fromDeg: number, toDeg: number, t: number): number {
-    const delta = (((toDeg - fromDeg + 180) % 360 + 360) % 360) - 180;
-    return fromDeg + delta * t;
-}
 
 //Mesmo raio do server (GameLoop.PLAYER_RADIUS) — TEM que bater, senão a
 //predição local anda por onde o server nunca deixaria, e o pawn "afunda"
@@ -47,7 +35,10 @@ class InstanceData {
 export default class GauntletNetworkBehaviour extends Behaviour{
     private wsSignaling!: WebSocket;
     private wsGame!: WebSocket;
-    private entities = new Map<number, Node>();
+    //guarda a behaviour, não o Node cru: ela já tem .node (herdado de
+    //Behaviour) e é quem sabe aplicar snap/dead reckoning desta entidade —
+    //ver NetworkedEntityBehaviour.
+    private entities = new Map<number, NetworkedEntityBehaviour>();
     private mapNode!: Node;
     //container irmão do Map: pawns de player, separado pra não confundir
     //teardown de mapa (estático, nunca destrói) com teardown de entidade
@@ -73,11 +64,6 @@ export default class GauntletNetworkBehaviour extends Behaviour{
     //(MineAvatarBehaviour) checar colisão com a MESMA regra do server
     //(isFreeAtCells), em vez de andar cego e só descobrir a parede no snap.
     private mapRows: string[] = [];
-    //última vx,vz conhecida por entidade (CÉLULAS/s, espaço do server) — pro
-    //dead reckoning dos REMOTOS entre snaps. O pawn local NÃO usa isto pra se
-    //mover (quem prediz ele é a própria MineAvatarBehaviour, a partir do
-    //input); só guardamos aqui por uniformidade do snap handler.
-    private lastVelocity = new Map<number, { vx: number; vz: number }>();
     constructor(tileWidth:number, tileHeight:number){
         super();
         this.tileWidth = tileWidth;
@@ -112,8 +98,8 @@ export default class GauntletNetworkBehaviour extends Behaviour{
 
     /** Delta em CÉLULAS (espaço do server/da predição) → delta em unidades-
      *  mundo. Mesma escala do serverToWorldX/Z, sem o offset de centralização
-     *  (aqui é DIFERENÇA, não posição absoluta). Usado pela MineAvatarBehaviour
-     *  (predição local) e pelo dead reckoning dos remotos, em update(). */
+     *  (aqui é DIFERENÇA, não posição absoluta). Usado pelo dead reckoning de
+     *  NetworkedEntityBehaviour.update(). */
     cellsToWorldDelta(dCellsX: number, dCellsZ: number): [number, number] {
         return [dCellsX * this.tileWidth, dCellsZ * this.tileHeight];
     }
@@ -169,33 +155,24 @@ export default class GauntletNetworkBehaviour extends Behaviour{
             }
             if(msg.operation === "despawn") {
                 for (const id of msg.ids) {
-                    const node = this.entities.get(id);
-                    if (!node) continue; //já não existia — nada a fazer
-                    destroyInstance(node); //roda dispose() das behaviours + destaca
+                    const behaviour = this.entities.get(id);
+                    if (!behaviour) continue; //já não existia — nada a fazer
+                    destroyInstance(behaviour.node); //roda dispose() das behaviours + destaca
                     this.entities.delete(id);
                 }
             }
             if(msg.operation === "snap") {
-                //fase 1b: sem rewind/replay de input — corrige por BLEND. O
-                //pawn local já foi movido pela predição da MineAvatarBehaviour
-                //(pode ter divergido um pouco); os remotos já foram
-                //extrapolados por dead reckoning em update() (ver lastVelocity).
-                //Aqui a gente puxa uma FRAÇÃO do erro pra verdade do server e
-                //atualiza a velocidade conhecida — pros remotos, é o que
-                //alimenta a extrapolação até o PRÓXIMO snap.
+                //fase 1b: sem rewind/replay de input — cada NetworkedEntityBehaviour
+                //corrige por BLEND (pawn local: residual da predição própria;
+                //remoto: residual do dead reckoning) e atualiza a velocidade
+                //conhecida, que alimenta a extrapolação até o PRÓXIMO snap.
                 for (const ent of msg.ents) {
-                    const node = this.entities.get(ent.id);
-                    if (!node) {
+                    const behaviour = this.entities.get(ent.id);
+                    if (!behaviour) {
                         console.warn("GauntletNetwork: snap com id desconhecido, ignorando", ent.id);
                         continue;
                     }
-                    const targetX = this.serverToWorldX(ent.x);
-                    const targetZ = this.serverToWorldZ(ent.z);
-                    node.position[0] += (targetX - node.position[0]) * SNAP_BLEND;
-                    node.position[2] += (targetZ - node.position[2]) * SNAP_BLEND;
-                    const targetYawDeg = ent.yaw * RAD_TO_DEG;
-                    node.eulerAngles = vec3.create(0, lerpAngleDeg(node.eulerAngles[1], targetYawDeg, SNAP_BLEND), 0);
-                    this.lastVelocity.set(ent.id, { vx: ent.vx, vz: ent.vz });
+                    behaviour.applySnap(ent.x, ent.z, ent.yaw, ent.vx, ent.vz);
                 }
             }
         } 
@@ -239,11 +216,18 @@ export default class GauntletNetworkBehaviour extends Behaviour{
 
             //behaviour no PIVOT (não no skin): é o pivot que representa "a
             //entidade" (posição+yaw movem ele), e o skin embaixo dele fica
-            //livre pra eventual lógica de animação futura (OtherAvatarBehaviour)
-            //sem competir por quem é dono do transform.
+            //livre pra eventual lógica de animação futura sem competir por
+            //quem é dono do transform.
             this.fabricator.fabricate([0, 0, 0], isMine ? "alice" : "bob", pivot);
-            pivot.addBehaviour(isMine ? new MineAvatarBehaviour(this) : new OtherAvatarBehaviour());
-            this.entities.set(ent.id, pivot);
+            //NetworkedEntityBehaviour: TODA entidade de rede tem (reconciliação
+            //por snap + dead reckoning) — hoje só player, amanhã monstro/tesouro
+            //igual. MineAvatarBehaviour é o extra só de QUEM SOU EU (input +
+            //predição local); locallyPredicted=true desliga o dead reckoning
+            //dela, que ficaria redundante com a predição.
+            const entityBehaviour = new NetworkedEntityBehaviour(this, isMine);
+            pivot.addBehaviour(entityBehaviour);
+            if (isMine) pivot.addBehaviour(new MineAvatarBehaviour(this));
+            this.entities.set(ent.id, entityBehaviour);
 
             if (isMine) {
                 const cam = this.node.world!.findNode("Camera");
@@ -349,7 +333,7 @@ export default class GauntletNetworkBehaviour extends Behaviour{
             && this.isWalkableCell(Math.floor(xCells + r), Math.floor(zCells + r));
     }
 
-    update(deltaTime: number): void {
+    update(_deltaTime: number): void {
         //Gatilho da conexão (padrão getState-no-update da casa): a UI fez o
         //POST /login e flipou a flag; daqui pra frente a sessão está
         //autenticada e dá pra abrir os WS.
@@ -357,19 +341,9 @@ export default class GauntletNetworkBehaviour extends Behaviour{
             this.connectionStarted = true;
             this.connectSignaling();
         }
-        //Dead reckoning dos REMOTOS: entre snaps (50ms a 20Hz), extrapola pela
-        //última velocidade conhecida — sem isso o movimento deles só "pula" a
-        //cada snap. O pawn local FICA DE FORA (id === myId): quem já move ele
-        //todo frame é a MineAvatarBehaviour, a partir do input de verdade.
-        const myId = this.instanceData?.myId;
-        for (const [id, node] of this.entities) {
-            if (id === myId) continue;
-            const vel = this.lastVelocity.get(id);
-            if (!vel) continue; //ainda não chegou nenhum snap pra essa entidade
-            const [dx, dz] = this.cellsToWorldDelta(vel.vx * deltaTime, vel.vz * deltaTime);
-            node.position[0] += dx;
-            node.position[2] += dz;
-        }
+        //Dead reckoning dos remotos e correção de resíduo do pawn local agora
+        //rodam dentro de cada NetworkedEntityBehaviour (World.update já visita
+        //todas as behaviours da árvore); nada a fazer aqui.
     }
 
 }
