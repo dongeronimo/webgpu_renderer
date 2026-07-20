@@ -10,6 +10,10 @@ export interface EntityDto {
     x: number;
     z: number;
     yaw: number;
+    //nome do state de animação ("idle"/"walk"...) — opcional até o server
+    //passar a mandar (ver GAUNTLET_MULTIPLAYER_NOTES.md); ausente = sem
+    //troca de clip (NetworkedEntityBehaviour.applySnap fica no estado atual).
+    state?: string;
 }
 
 export interface SnapEntity {
@@ -18,9 +22,10 @@ export interface SnapEntity {
     z: number;
     yaw: number;
     //cells/s, espaço do server — pro dead reckoning entre snaps (ver
-    //GauntletNetwork.lastVelocity/update()). Vem de GameLoop.stepMovement.
+    //NetworkedEntityBehaviour.update()). Vem de GameLoop.stepMovement.
     vx: number;
     vz: number;
+    state?: string;
 }
 
 export interface WelcomeMessage {

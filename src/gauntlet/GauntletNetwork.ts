@@ -172,7 +172,7 @@ export default class GauntletNetworkBehaviour extends Behaviour{
                         console.warn("GauntletNetwork: snap com id desconhecido, ignorando", ent.id);
                         continue;
                     }
-                    behaviour.applySnap(ent.x, ent.z, ent.yaw, ent.vx, ent.vz);
+                    behaviour.applySnap(ent.x, ent.z, ent.yaw, ent.vx, ent.vz, ent.state);
                 }
             }
         } 

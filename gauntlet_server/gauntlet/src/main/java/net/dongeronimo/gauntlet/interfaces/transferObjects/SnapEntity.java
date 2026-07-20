@@ -6,4 +6,4 @@ package net.dongeronimo.gauntlet.interfaces.transferObjects;
  * CORRENTE pós-suavização — ver GameLoop.stepMovement) viajam pro client
  * fazer dead reckoning dos remotos entre snapshots.
  */
-public record SnapEntity(long id, double x, double z, double yaw, double vx, double vz) {}
+public record SnapEntity(long id, double x, double z, double yaw, double vx, double vz, String state) {}

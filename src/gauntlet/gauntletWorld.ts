@@ -26,6 +26,8 @@ import PrefabFabricator from "../PrefabFabricator";
 import { SkinnedPhongMaterial } from "../skinning/SkinnedPhongMaterial";
 import { Material } from "../material";
 import { SkinnedRenderPass } from "../skinning/skinnedRenderPass";
+import { AnimatorBehaviour } from "../skinning/AnimatorBehaviour";
+import type { AnimationClip } from "../animation";
 
 export class GauntletWorld extends World implements PrefabFabricator {
     private mainPass!: MainRenderPass;
@@ -107,8 +109,15 @@ export class GauntletWorld extends World implements PrefabFabricator {
         //e mapSync chega UMA vez (perdeu a corrida = mundo vazio pra sempre).
         await this.loadModularDungeon();
 
-        await this.loadP1Character(player1JointsMaterial, player1BodyMaterial);
-        await this.loadP2Character(player2JointsMaterial, player2BodyMaterial);
+        //Clips de idle/walk — mesmo esqueleto do xbot (mixamorig:*), casam
+        //por nome sem retargeting (ver animation.ts). UM carregamento só,
+        //compartilhado entre os templates "alice" e "bob" (AnimationClip é
+        //asset sem ref a Node — ver skinning-system).
+        const idleClip = await this.loadAnimClip("/anims/rifle_idle.glb");
+        const walkClip = await this.loadAnimClip("/anims/rifle_walk_forward.glb");
+
+        await this.loadP1Character(player1JointsMaterial, player1BodyMaterial, idleClip, walkClip);
+        await this.loadP2Character(player2JointsMaterial, player2BodyMaterial, idleClip, walkClip);
         //adiciona capacidades de rede do world
         this.root.addBehaviour(new GauntletNetworkBehaviour(2,2));
     }
@@ -144,8 +153,31 @@ export class GauntletWorld extends World implements PrefabFabricator {
             }
         })
     }
+    //Um clip só-de-keyframes (sem mesh), mesmo padrão do capoeira.glb do
+    //SkinningDemoWorld — ver skinning-system.
+    private async loadAnimClip(path: string): Promise<AnimationClip> {
+        const result = await loadGltf(this.device, path);
+        const clip = result.animations[0];
+        if (!clip) {
+            throw new Error(`GauntletWorld: "${path}" sem animação.`);
+        }
+        return clip;
+    }
+
+    //Anexa idle/walk no ROOT do template (armature), ANTES do
+    //Prefab.fromTemplate — mesma convenção de `AnimatorBehaviour.clip`: os
+    //dois states são autorados aqui uma vez, cada instância clonada resolve
+    //os PRÓPRIOS bindings no start() (ver AnimatorBehaviour).
+    private attachAnimator(armature: Node, idleClip: AnimationClip, walkClip: AnimationClip): void {
+        const animator = new AnimatorBehaviour();
+        animator.registerState("idle", idleClip, { loop: true });
+        animator.registerState("walk", walkClip, { loop: true });
+        animator.initialState = "idle";
+        armature.addBehaviour(animator);
+    }
+
     // To assumindo que é o xbot do mixamo. Quando mudar isso aqui vai ter que mudar tudo
-    private async loadP1Character(jointMat:Material, body:Material) {
+    private async loadP1Character(jointMat:Material, body:Material, idleClip: AnimationClip, walkClip: AnimationClip) {
         const {roots, nodes, meshes} = await loadGltf(this.device, "/models/xbot.glb");
         //assets do World: sem isto o destroy() não libera os buffers do xbot
         this.meshes.push(...meshes);
@@ -162,11 +194,12 @@ export class GauntletWorld extends World implements PrefabFabricator {
         }
         //destaca pra virar template
         armature.setParent(null);
+        this.attachAnimator(armature, idleClip, walkClip);
         const prefab = Prefab.fromTemplate(armature, "alice");
         this.prefabs.set("alice", prefab);
     }
     // To assumindo que é o xbot do mixamo. Qaundo mudar isso aqui vai ter que mudar tudo
-    private async loadP2Character(jointMat:Material, body:Material) {
+    private async loadP2Character(jointMat:Material, body:Material, idleClip: AnimationClip, walkClip: AnimationClip) {
         const {roots, nodes, meshes} = await loadGltf(this.device, "/models/xbot.glb");
         this.meshes.push(...meshes);
         for(const node of nodes) {
@@ -182,9 +215,10 @@ export class GauntletWorld extends World implements PrefabFabricator {
         }
         //destaca pra virar template
         armature.setParent(null);
+        this.attachAnimator(armature, idleClip, walkClip);
         const prefab = Prefab.fromTemplate(armature, "bob");
         this.prefabs.set("bob", prefab);
-    }    
+    }
 
     private createPrefab(n:Node, s:string){
         n.setParent(null);

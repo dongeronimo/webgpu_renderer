@@ -6,4 +6,4 @@ package net.dongeronimo.gauntlet.interfaces.transferObjects;
  * tabela do client). O snap NÃO usa isto: lá vai só o que muda a 20 Hz
  * (SnapEntity).
  */
-public record EntityDto(long id, String kind, long owner, double x, double z, double yaw) {}
+public record EntityDto(long id, String kind, long owner, double x, double z, double yaw, String state) {}

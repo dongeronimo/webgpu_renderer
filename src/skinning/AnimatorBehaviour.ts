@@ -35,6 +35,12 @@ interface AnimEvent {
     callback: () => void;
 }
 
+interface StateEntry {
+    clip: AnimationClip;
+    loop: boolean;
+    speed: number;
+}
+
 //Canais do clip agrupados por Node+propriedade — troca a lista plana antiga
 //(um item por canal) por um formato que o blend consegue casar osso a osso:
 //pra misturar a rotação de DOIS clips no mesmo osso, preciso achar os dois
@@ -46,6 +52,9 @@ interface NodeChannels {
 }
 
 const IMMEDIATE: ClipTransition = { mode: "immediate" };
+//"Rápida mas não instantânea" (pedido do gauntlet, idle↔walk): default de
+//playState quando o chamador não escolhe uma transição própria.
+const DEFAULT_STATE_TRANSITION: ClipTransition = { mode: "crossfade", blendSeconds: 0.15 };
 
 //Scratches de módulo pra não alocar por osso/frame durante o blend (só usados
 //dentro de applyBlended, que é síncrono — sem risco de reentrância).
@@ -61,6 +70,18 @@ export class AnimatorBehaviour extends Behaviour {
     clip: AnimationClip | null = null;
     loop = true;
     speed = 1;
+    /** Nome do state (registrado via registerState) tocado a partir do
+     *  start(), no lugar de `clip` cru — pra quem usa states nomeados
+     *  (ex.: gauntlet: idle/walk vindos do server). Setado antes de virar
+     *  prefab, mesma convenção de `clip`. */
+    initialState: string | null = null;
+
+    //Registro nome→clip, autorado no TEMPLATE (registerState ANTES do
+    //Prefab.fromTemplate) — mesma convenção de `clip`/eventos: dado
+    //compartilhado, resolvido em bindings por-instância no start() de cada
+    //cópia via playState.
+    private states = new Map<string, StateEntry>();
+    private currentStateName: string | null = null;
 
     private currentClip: AnimationClip | null = null;
     private currentBindings: Map<Node, NodeChannels> = new Map();
@@ -96,9 +117,36 @@ export class AnimatorBehaviour extends Behaviour {
         //Map (e os MESMOS arrays) compartilhado entre todo mundo, já que o
         //clone default de Behaviour copia campos não-Node por referência.
         this.events = new Map([...this.events].map(([clip, list]) => [clip, [...list]]));
-        if (this.clip) {
+        //Cópia rasa basta aqui: entries são objetos imutáveis na prática (só
+        //substituídos via registerState, nunca mutados no lugar).
+        this.states = new Map(this.states);
+
+        if (this.initialState) {
+            this.playState(this.initialState, IMMEDIATE);
+        } else if (this.clip) {
             this.setClip(this.clip, { loop: this.loop, speed: this.speed, transition: IMMEDIATE });
         }
+    }
+
+    /** Associa `name` a `clip` — autore no template, antes do
+     *  Prefab.fromTemplate (ver comentário do campo `states`). */
+    registerState(name: string, clip: AnimationClip, opts?: { loop?: boolean; speed?: number }): void {
+        this.states.set(name, { clip, loop: opts?.loop ?? true, speed: opts?.speed ?? 1 });
+    }
+
+    /** Toca o state `name` (precisa ter sido registrado via registerState).
+     *  No-op se já for o state corrente — evita re-blend a cada chamada
+     *  redundante (ex.: um snap de rede repetindo o mesmo state a 20Hz).
+     *  Sem `transition`, usa crossfade curto (DEFAULT_STATE_TRANSITION). */
+    playState(name: string, transition?: ClipTransition): void {
+        if (name === this.currentStateName) return;
+        const entry = this.states.get(name);
+        if (!entry) {
+            console.warn(`AnimatorBehaviour: state "${name}" não registrado (registerState) em "${this.node.name}".`);
+            return;
+        }
+        this.currentStateName = name;
+        this.setClip(entry.clip, { loop: entry.loop, speed: entry.speed, transition: transition ?? DEFAULT_STATE_TRANSITION });
     }
 
     /** Registra `callback` pra disparar quando a reprodução de `clip` cruzar

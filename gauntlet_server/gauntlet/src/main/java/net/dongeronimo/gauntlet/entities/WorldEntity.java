@@ -15,6 +15,16 @@ public class WorldEntity {
     private double x;
     private double z;
     private double yaw;
+    /**
+     * Nome do state de animação ("idle", "walk", e no futuro "dead",
+     * "attacking" etc.) — campo de VERDADE da entidade, não algo computado só
+     * na hora de serializar. idle/walk hoje SÃO transientes na prática (o
+     * GameLoop recalcula toda tick a partir da velocidade, em stepMovement) —
+     * mas states futuros como "dead" não vão ser: alguma OUTRA lógica (dano,
+     * morte) vai setar isto direto e stepMovement não pode pisar em cima.
+     * Por isso mora aqui como estado real, não num cálculo isolado no DTO.
+     */
+    private String state = "idle";
 
     public WorldEntity(long id, String kind, long owner, double x, double z, double yaw) {
         this.id = id;
@@ -31,7 +41,9 @@ public class WorldEntity {
     public double getX() { return x; }
     public double getZ() { return z; }
     public double getYaw() { return yaw; }
+    public String getState() { return state; }
     public void setX(double x) { this.x = x; }
     public void setZ(double z) { this.z = z; }
     public void setYaw(double yaw) { this.yaw = yaw; }
+    public void setState(String state) { this.state = state; }
 }

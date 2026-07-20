@@ -57,21 +57,23 @@ public class ServerMessageSerializationTest {
     @Test
     void spawnCarregaORetratoCompletoDaEntidade() {
         String json = mapper.writeValueAsString(
-            new Spawn(List.of(new EntityDto(9, "player", 9, 0, 0, 0))));
+            new Spawn(List.of(new EntityDto(9, "player", 9, 0, 0, 0, "idle"))));
         System.out.println("spawn: " + json);
         assertTrue(json.contains("\"operation\":\"spawn\""));
         assertTrue(json.contains("\"kind\":\"player\""));
         assertTrue(json.contains("\"owner\":9"));
+        assertTrue(json.contains("\"state\":\"idle\""));
     }
 
     @Test
     void snapCarregaSoOQueMudaA20Hz() {
         String json = mapper.writeValueAsString(
-            new Snap(4021, List.of(new SnapEntity(9, 1.2, 3.4, 0.5, 1.0, -1.0))));
+            new Snap(4021, List.of(new SnapEntity(9, 1.2, 3.4, 0.5, 1.0, -1.0, "walk"))));
         System.out.println("snap: " + json);
         assertTrue(json.contains("\"operation\":\"snap\""));
         assertTrue(json.contains("\"tick\":4021"));
         assertTrue(json.contains("\"id\":9"));
+        assertTrue(json.contains("\"state\":\"walk\""));
         assertTrue(!json.contains("kind")); //shape enxuto: kind/owner já foram no spawn
     }
 }

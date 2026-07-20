@@ -55,6 +55,11 @@ public class GameLoop {
     private static final double TURN_RATE_RAD_PER_SEC = Math.toRadians(540.0);
     //"raio" do corpo do player pra colisão AABB×grid, em cells.
     private static final double PLAYER_RADIUS = 0.3;
+    //cells/segundo — abaixo disso conta como "idle" mesmo com resíduo de
+    //velocidade (ex.: freando até parar). Só decide idle/walk; não é o
+    //mesmo epsilon do "praticamente zero" usado pra pular a resolução de
+    //colisão logo abaixo (esse é bem mais apertado, 1e-6).
+    private static final double MOVE_STATE_EPSILON = 0.05;
     private static final double[] ZERO_INTENT = {0.0, 0.0};
     private static final double[] ZERO_VELOCITY = {0.0, 0.0};
 
@@ -167,6 +172,12 @@ public class GameLoop {
             vel[1] = moveToward(vel[1], targetVz, maxDelta);
 
             double speed = Math.hypot(vel[0], vel[1]);
+            //Movimento é a ÚNICA coisa que decide idle/walk hoje, então dá pra
+            //recalcular toda tick sem medo — mas isto SETA e.state (não deriva
+            //só na hora de montar o DTO): quando existir um state que não vem
+            //do movimento (ex.: "dead", setado por um sistema de dano), este
+            //trecho não pode continuar pisando em cima dele sem checar antes.
+            e.setState(speed > MOVE_STATE_EPSILON ? "walk" : "idle");
             if (speed < 1e-6)
                 continue;
 
@@ -269,7 +280,7 @@ public class GameLoop {
         List<SnapEntity> ents = instance.getWorld().values().stream()
             .map(e -> {
                 double[] vel = instance.getVelocities().getOrDefault(e.getId(), ZERO_VELOCITY);
-                return new SnapEntity(e.getId(), e.getX(), e.getZ(), e.getYaw(), vel[0], vel[1]);
+                return new SnapEntity(e.getId(), e.getX(), e.getZ(), e.getYaw(), vel[0], vel[1], e.getState());
             })
             .toList();
         broadcast(instance, new Snap(instance.getTick(), ents));
@@ -309,6 +320,6 @@ public class GameLoop {
     }
 
     private EntityDto toDto(WorldEntity e) {
-        return new EntityDto(e.getId(), e.getKind(), e.getOwner(), e.getX(), e.getZ(), e.getYaw());
+        return new EntityDto(e.getId(), e.getKind(), e.getOwner(), e.getX(), e.getZ(), e.getYaw(), e.getState());
     }
 }

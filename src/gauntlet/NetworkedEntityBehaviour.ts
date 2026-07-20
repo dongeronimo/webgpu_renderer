@@ -1,5 +1,6 @@
 import { vec3 } from "wgpu-matrix";
 import { Behaviour } from "../behaviour";
+import { AnimatorBehaviour } from "../skinning/AnimatorBehaviour";
 import type GauntletNetworkBehaviour from "./GauntletNetwork";
 
 //yaw chega do server em RADIANOS (Math.atan2 java); node.eulerAngles do
@@ -42,6 +43,10 @@ export default class NetworkedEntityBehaviour extends Behaviour {
     private velZ = 0;
     //sem snap ainda, não há velocidade confiável pra extrapolar
     private hasSnapped = false;
+    //AnimatorBehaviour do filho (o armature fabricado pelo prefab) — achada
+    //uma vez no start(), null se o prefab não tiver uma (ex.: tesouro sem
+    //skin). Ver skinning/AnimatorBehaviour.playState.
+    private animator: AnimatorBehaviour | null = null;
 
     constructor(network: GauntletNetworkBehaviour, locallyPredicted: boolean) {
         super();
@@ -49,10 +54,21 @@ export default class NetworkedEntityBehaviour extends Behaviour {
         this.locallyPredicted = locallyPredicted;
     }
 
+    override start(): void {
+        for (const child of this.node.children) {
+            const found = child.behaviours.find((b): b is AnimatorBehaviour => b instanceof AnimatorBehaviour);
+            if (found) {
+                this.animator = found;
+                break;
+            }
+        }
+    }
+
     /** Chamado pela GauntletNetworkBehaviour a cada snap que menciona esta
      *  entidade. Puxa posição/yaw uma FRAÇÃO rumo ao valor do server (blend,
-     *  não teleporte) e guarda a velocidade corrente pro dead reckoning. */
-    applySnap(xCells: number, zCells: number, yawRad: number, vx: number, vz: number): void {
+     *  não teleporte), guarda a velocidade corrente pro dead reckoning, e
+     *  troca a animação se o `state` do server mudou (ex.: "idle"→"walk"). */
+    applySnap(xCells: number, zCells: number, yawRad: number, vx: number, vz: number, state?: string): void {
         const targetX = this.network.serverToWorldX(xCells);
         const targetZ = this.network.serverToWorldZ(zCells);
         this.node.position[0] += (targetX - this.node.position[0]) * SNAP_BLEND;
@@ -62,6 +78,9 @@ export default class NetworkedEntityBehaviour extends Behaviour {
         this.velX = vx;
         this.velZ = vz;
         this.hasSnapped = true;
+        if (state !== undefined) {
+            this.animator?.playState(state);
+        }
     }
 
     //Dead reckoning: entre snaps (50ms a 20Hz), extrapola pela última
