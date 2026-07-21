@@ -87,10 +87,10 @@ public class GameWS extends TextWebSocketHandler {
             System.out.println("mensagem malformada no socket de jogo: " + e);
             return;
         }
-        if (msg instanceof Input(long seq, double dx, double dz)) {
+        if (msg instanceof Input(long seq, double turn, double move)) {
             Player player = (Player) session.getAttributes().get("player");
             Instance instance = (Instance) session.getAttributes().get("instance");
-            instance.enqueue(new InstanceEvent.PlayerInput(player, dx, dz, seq));
+            instance.enqueue(new InstanceEvent.PlayerInput(player, turn, move, seq));
         }
         //TODO: ping entra aqui também, no 1a ainda não fechado.
     }

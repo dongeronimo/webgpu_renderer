@@ -20,7 +20,11 @@
 //quantizados (~100µs) por proteção contra fingerprinting — ruído pequeno
 //na escala de ms que interessa aqui.
 
-const MAX_PASSES = 8; //passes medidos por frame (2 timestamps cada)
+//passes medidos por frame (2 timestamps cada). Generoso de propósito: o
+//GauntletShadowPass mede 1 por LUZ visível (spot/directional), não 1 só
+//agregado — a tabela cresce com o Nº de luzes, que é exatamente o custo que
+//se quer enxergar. Custo do slot extra é irrisório (16 bytes/query).
+const MAX_PASSES = 64;
 const STAGING_COUNT = 4; //frames de leitura em voo antes de pular medição
 const EMA_ALPHA = 0.1; //suavização exponencial dos valores exibidos
 

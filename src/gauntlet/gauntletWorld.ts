@@ -4,8 +4,11 @@
 //de rede (WebSocket, snapshots, interpolação) vai ser construída. Mundo
 //separado de propósito: experimento novo não mexe nos mundos fechados.
 //
-//Reusa MainRenderPass + PhongColorMaterial (forward Phong, 1 luz) da
-//StarshipDemo — nada novo de render aqui, igual ao TrainWorld.
+//Tem passes e materiais PRÓPRIOS (gauntletMainRenderPass/gauntletSkinnedRenderPass
+//+ gauntlet/materials/*): Gauntlet é o 1o mundo com suporte a múltiplas luzes
+//(point/spot/directional), então divergiu do MainRenderPass/SkinnedRenderPass
+//genéricos que Train/GameVolume/StarshipDemo ainda usam com 1 luz só — ver
+//gauntletLighting.ts pro porquê da divergência.
 import { vec3 } from "wgpu-matrix";
 import { Camera } from "../camera";
 import { FinalRenderPass } from "../finalPass";
@@ -13,32 +16,53 @@ import { World } from "../world";
 import { Node } from "../node";
 import { Mesh } from "../mesh";
 import {  RenderPassBit } from "../renderable";
-import { Light } from "../Light";
+import { PointLight } from "../Light";
 import { loadGltf } from "../gltfLoader";
 import { registerMaterial } from "../material";
-import { MainRenderPass } from "../StarshipDemo/mainRenderPass";
-import { PhongColorMaterial } from "../StarshipDemo/PhongColorMaterial";
+import { GauntletLighting } from "./gauntletLighting";
+import { GauntletMainRenderPass } from "./gauntletMainRenderPass";
+import { GauntletShadowPass } from "./gauntletShadowPass";
+import { PhongColorMaterial } from "./materials/PhongColorMaterial";
 import GauntletNetworkBehaviour from "./GauntletNetwork";
 import { TexturedOpaquePhong } from "./materials/TexturedOpaquePhong";
 import { loadTexture } from "../textureLoader";
 import { Prefab } from "../prefab";
 import PrefabFabricator from "../PrefabFabricator";
-import { SkinnedPhongMaterial } from "../skinning/SkinnedPhongMaterial";
+import { SkinnedPhongMaterial } from "./materials/SkinnedPhongMaterial";
 import { Material } from "../material";
-import { SkinnedRenderPass } from "../skinning/skinnedRenderPass";
+import { GauntletSkinnedRenderPass } from "./gauntletSkinnedRenderPass";
 import { AnimatorBehaviour } from "../skinning/AnimatorBehaviour";
 import type { AnimationClip } from "../animation";
+import { store } from "../redux/store";
+
+//A dungeon só é INSTANCIADA via rede (fabricate de Wall00/Floor00 no
+//mapSync do GauntletNetwork), bem depois do createWorld() retornar — não dá
+//pra computar o AABB de verdade da cena aqui (a árvore ainda não tem
+//geometria nenhuma). Uso a extensão CONHECIDA do mapa (mesmo comentário da
+//câmera abaixo: 32×32 células × tile 2 = 64×64, centrado na origem) com
+//margem generosa de altura, só pra fitar o ortho da sombra do directional.
+const DUNGEON_SHADOW_BOUNDS_MIN = vec3.create(-35, -1, -35);
+const DUNGEON_SHADOW_BOUNDS_MAX = vec3.create(35, 20, 35);
 
 export class GauntletWorld extends World implements PrefabFabricator {
-    private mainPass!: MainRenderPass;
+    private mainPass!: GauntletMainRenderPass;
     private finalPass!: FinalRenderPass;
     private canvas!: HTMLCanvasElement;
     public meshes: Mesh[] = [];
-    public prefabs: Map<string, Prefab> = new Map(); 
-    private skinnedPass!: SkinnedRenderPass;
+    public prefabs: Map<string, Prefab> = new Map();
+    private skinnedPass!: GauntletSkinnedRenderPass;
+    private lighting!: GauntletLighting;
+    private shadowPass!: GauntletShadowPass;
+    //lastSeen (mesmo padrão de VolumeRaycastBehaviour/SetCtfBehaviour) — só
+    //que aqui é o WORLD que lê o redux a cada update(), não uma behaviour:
+    //exceção combinada com o usuário, exigida porque redimensionar os
+    //render targets de sombra é responsabilidade de quem os possui.
+    private lastShadowMapSize = store.getState().gauntlet.shadowMapSize;
     createRenderPasses(canvas: HTMLCanvasElement, canvasFormat: GPUTextureFormat): void {
         this.canvas = canvas;
-        this.skinnedPass = new SkinnedRenderPass(this.device, canvasFormat, "clear");
+        this.lighting = new GauntletLighting(this.device);
+        this.shadowPass = new GauntletShadowPass(this.device);
+        this.skinnedPass = new GauntletSkinnedRenderPass(this.device, this.lighting, canvasFormat, "clear");
         //"clear": aqui é o PRIMEIRO pass a tocar o alvo — desenha a dungeon,
         //e o skinnedPass entra DEPOIS por cima via renderOnto (color+depth
         //"load"), senão o chão (opaco, cobre a tela inteira na câmera
@@ -46,8 +70,22 @@ export class GauntletWorld extends World implements PrefabFabricator {
         //default "discard"): sem isso o depth do mainPass some antes do
         //skinnedPass poder testar contra ele — o teste falha pra tudo e o
         //avatar não desenha nenhum pixel, mesmo desenhado com sucesso.
-        this.mainPass = new MainRenderPass(this.device, canvasFormat, "clear", "store");
+        this.mainPass = new GauntletMainRenderPass(this.device, this.lighting, canvasFormat, "clear", "store");
         this.finalPass = new FinalRenderPass(this.device, canvas, canvasFormat);
+    }
+
+    /**
+     * Lê o redux a cada frame (padrão lastSeen) e manda a GauntletLighting
+     * redimensionar os shadow maps quando o usuário muda o campo na UI —
+     * ver GauntletShadowSettingsPanel.tsx.
+     */
+    override update(deltaTime: number): void {
+        super.update(deltaTime);
+        const shadowMapSize = store.getState().gauntlet.shadowMapSize;
+        if (shadowMapSize !== this.lastShadowMapSize) {
+            this.lastShadowMapSize = shadowMapSize;
+            this.lighting.setShadowMapSize(shadowMapSize);
+        }
     }
 
     async createWorld(perspective: { aspect: number; fovy: number; near: number; far: number; }): Promise<void> {
@@ -89,13 +127,22 @@ export class GauntletWorld extends World implements PrefabFabricator {
         camera.far = 250;
         cameraNode.camera = camera;
 
-        //Luz no alto e LONGE (≥150u), pela calibração herdada: o
-        //PhongColorMaterial tem light0Power=250 fixo com atenuação linear —
-        //perto ela estoura tudo pra branco. Offset lateral pra faces verticais
-        //não ficarem só no ambiente.
+        //Fita o ortho da sombra do directional na extensão conhecida do
+        //mapa (ver comentário no topo do arquivo) — precisa estar pronto
+        //antes do 1º render(), não depende de nenhuma luz existir ainda.
+        this.lighting.setShadowSceneBounds(DUNGEON_SHADOW_BOUNDS_MIN, DUNGEON_SHADOW_BOUNDS_MAX);
+
+        //Luz no alto e LONGE (≥150u) — mesma posição de antes, mas agora
+        //`intensity` é propriedade da PointLight em vez de light0Power fixo
+        //no shader. Reduzida (era 250) — 250 era calibrado pra atenuação
+        //linear sem nenhuma outra luz na cena; com a spot fraca do player
+        //(ver GauntletNetwork.onEntsAdded) 250 fica exagerado perto do chão.
+        //Ajuste visual pendente — comece por aqui e suba/desça olhando a cena.
         const light = new Node();
         light.name = "Light0";
-        light.light = new Light();
+        const ceilingLight = new PointLight();
+        ceilingLight.intensity = 30;
+        light.light = ceilingLight;
         vec3.set(60, 150, 60, light.position);
         this.rootNode.addChild(light);
 
@@ -109,15 +156,16 @@ export class GauntletWorld extends World implements PrefabFabricator {
         //e mapSync chega UMA vez (perdeu a corrida = mundo vazio pra sempre).
         await this.loadModularDungeon();
 
-        //Clips de idle/walk — mesmo esqueleto do xbot (mixamorig:*), casam
-        //por nome sem retargeting (ver animation.ts). UM carregamento só,
+        //Clips de idle/walk/walkBackward — mesmo esqueleto do xbot (mixamorig:*),
+        //casam por nome sem retargeting (ver animation.ts). UM carregamento só,
         //compartilhado entre os templates "alice" e "bob" (AnimationClip é
         //asset sem ref a Node — ver skinning-system).
         const idleClip = await this.loadAnimClip("/anims/rifle_idle.glb");
         const walkClip = await this.loadAnimClip("/anims/rifle_walk_forward.glb");
+        const walkBackwardClip = await this.loadAnimClip("/anims/rifle_walk_backward.glb");
 
-        await this.loadP1Character(player1JointsMaterial, player1BodyMaterial, idleClip, walkClip);
-        await this.loadP2Character(player2JointsMaterial, player2BodyMaterial, idleClip, walkClip);
+        await this.loadP1Character(player1JointsMaterial, player1BodyMaterial, idleClip, walkClip, walkBackwardClip);
+        await this.loadP2Character(player2JointsMaterial, player2BodyMaterial, idleClip, walkClip, walkBackwardClip);
         //adiciona capacidades de rede do world
         this.root.addBehaviour(new GauntletNetworkBehaviour(2,2));
     }
@@ -164,20 +212,23 @@ export class GauntletWorld extends World implements PrefabFabricator {
         return clip;
     }
 
-    //Anexa idle/walk no ROOT do template (armature), ANTES do
+    //Anexa idle/walk/walkBackward no ROOT do template (armature), ANTES do
     //Prefab.fromTemplate — mesma convenção de `AnimatorBehaviour.clip`: os
-    //dois states são autorados aqui uma vez, cada instância clonada resolve
-    //os PRÓPRIOS bindings no start() (ver AnimatorBehaviour).
-    private attachAnimator(armature: Node, idleClip: AnimationClip, walkClip: AnimationClip): void {
+    //três states são autorados aqui uma vez, cada instância clonada resolve
+    //os PRÓPRIOS bindings no start() (ver AnimatorBehaviour). "walkBackward"
+    //TEM que bater com o nome que GameLoop.stepMovement manda no `state` do
+    //snap, senão playState só loga um warning e ignora (ver AnimatorBehaviour).
+    private attachAnimator(armature: Node, idleClip: AnimationClip, walkClip: AnimationClip, walkBackwardClip: AnimationClip): void {
         const animator = new AnimatorBehaviour();
         animator.registerState("idle", idleClip, { loop: true });
         animator.registerState("walk", walkClip, { loop: true });
+        animator.registerState("walkBackward", walkBackwardClip, { loop: true });
         animator.initialState = "idle";
         armature.addBehaviour(animator);
     }
 
     // To assumindo que é o xbot do mixamo. Quando mudar isso aqui vai ter que mudar tudo
-    private async loadP1Character(jointMat:Material, body:Material, idleClip: AnimationClip, walkClip: AnimationClip) {
+    private async loadP1Character(jointMat:Material, body:Material, idleClip: AnimationClip, walkClip: AnimationClip, walkBackwardClip: AnimationClip) {
         const {roots, nodes, meshes} = await loadGltf(this.device, "/models/xbot.glb");
         //assets do World: sem isto o destroy() não libera os buffers do xbot
         this.meshes.push(...meshes);
@@ -194,12 +245,12 @@ export class GauntletWorld extends World implements PrefabFabricator {
         }
         //destaca pra virar template
         armature.setParent(null);
-        this.attachAnimator(armature, idleClip, walkClip);
+        this.attachAnimator(armature, idleClip, walkClip, walkBackwardClip);
         const prefab = Prefab.fromTemplate(armature, "alice");
         this.prefabs.set("alice", prefab);
     }
     // To assumindo que é o xbot do mixamo. Qaundo mudar isso aqui vai ter que mudar tudo
-    private async loadP2Character(jointMat:Material, body:Material, idleClip: AnimationClip, walkClip: AnimationClip) {
+    private async loadP2Character(jointMat:Material, body:Material, idleClip: AnimationClip, walkClip: AnimationClip, walkBackwardClip: AnimationClip) {
         const {roots, nodes, meshes} = await loadGltf(this.device, "/models/xbot.glb");
         this.meshes.push(...meshes);
         for(const node of nodes) {
@@ -215,7 +266,7 @@ export class GauntletWorld extends World implements PrefabFabricator {
         }
         //destaca pra virar template
         armature.setParent(null);
-        this.attachAnimator(armature, idleClip, walkClip);
+        this.attachAnimator(armature, idleClip, walkClip, walkBackwardClip);
         const prefab = Prefab.fromTemplate(armature, "bob");
         this.prefabs.set("bob", prefab);
     }
@@ -230,12 +281,18 @@ export class GauntletWorld extends World implements PrefabFabricator {
         this.finalPass.resizeIfNeeded();
         const width = this.canvas.width;
         const height = this.canvas.height;
+        //UMA coleta de luzes por frame, compartilhada pelos dois passes —
+        //ver gauntletLighting.ts.
+        this.lighting.updateFrame(this.rootNode, width, height);
+        //Shadow maps de spot/directional ANTES do main/skinned pass — eles
+        //amostram essas texturas no fragment shader (ver gauntletLighting.ts).
+        this.shadowPass.render(encoder, this.rootNode, this.lighting);
         //dungeon primeiro (clear, própria textura do mainPass); os avatares
         //skinnados desenham DEPOIS, por cima, no MESMO color+depth (renderOnto
         //= load+load) — sem isso os dois passes escrevem em texturas
         //separadas e só a do mainPass chega no finalPass (avatar nunca aparece).
         this.mainPass.render(encoder, this.rootNode, width, height);
-        this.skinnedPass.renderOnto(encoder, this.rootNode, this.mainPass.colorView, this.mainPass.depthView, width, height);
+        this.skinnedPass.renderOnto(encoder, this.rootNode, this.mainPass.colorView, this.mainPass.depthView);
         this.finalPass.render(encoder, this.mainPass.colorView);
     }
 
@@ -247,6 +304,9 @@ export class GauntletWorld extends World implements PrefabFabricator {
         }
         this.meshes = [];
         this.mainPass.destroy();
+        this.skinnedPass.destroy();
+        this.shadowPass.destroy();
+        this.lighting.destroy();
         this.finalPass.destroy();
     }
 }

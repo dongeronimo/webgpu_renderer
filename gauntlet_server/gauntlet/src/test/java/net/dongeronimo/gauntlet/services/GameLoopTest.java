@@ -6,6 +6,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.atLeastOnce;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
 
 import java.util.List;
 
@@ -17,6 +18,8 @@ import org.springframework.web.socket.WebSocketSession;
 import net.dongeronimo.gauntlet.entities.Instance;
 import net.dongeronimo.gauntlet.entities.InstanceEvent;
 import net.dongeronimo.gauntlet.entities.Player;
+import net.dongeronimo.gauntlet.entities.PlayerControllerSettings;
+import net.dongeronimo.gauntlet.persistence.PlayerControllerSettingsPersistence;
 import tools.jackson.databind.ObjectMapper;
 
 /**
@@ -27,8 +30,16 @@ import tools.jackson.databind.ObjectMapper;
  */
 public class GameLoopTest {
     //executor null de propósito: ninguém chama start/stop aqui, o tick é manual
-    private final GameLoop loop = new GameLoop(new ObjectMapper(), null);
+    private final GameLoop loop = newGameLoop();
     private final MapGenerator generator = new MapGenerator();
+
+    //mock em vez de subir Spring/H2 pra um teste que não é sobre persistence -
+    //mesmos valores default de PlayerControllerSettingsPersistence.defaults().
+    private static GameLoop newGameLoop() {
+        PlayerControllerSettingsPersistence settings = mock(PlayerControllerSettingsPersistence.class);
+        when(settings.get()).thenReturn(new PlayerControllerSettings(1, 3.0, 1.5, 20.0, 90.0, 0.05, 0.3));
+        return new GameLoop(new ObjectMapper(), null, settings);
+    }
 
     private Instance instancia() {
         Instance instance = new Instance(1);

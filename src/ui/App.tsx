@@ -26,6 +26,7 @@ import RaycastESSRenderProperties from "./raycast_ess/raycastESSRenderProperties
 import { CtfEditorPanel } from "./ctf/CtfEditorPanel";
 import { GauntletWorld } from "../gauntlet/gauntletWorld";
 import { GauntletLoginPanel } from "./gauntlet/GauntletLoginPanel";
+import { GauntletShadowSettingsPanel } from "./gauntlet/GauntletShadowSettingsPanel";
 import RaycastESSToDos from "./raycast_ess/raycastESSToDos";
 
 export function TerraPositionTable({ world }: { world: World }) {
@@ -104,7 +105,12 @@ function WorldUi({ world }: { world: World }) {
         )
     }
     if (world instanceof GauntletWorld) {
-        return <GauntletLoginPanel />;
+        return (
+            <div>
+                <GauntletLoginPanel />
+                <GauntletShadowSettingsPanel />
+            </div>
+        );
     }
     //mundo sem UI própria: fica só o WorldSwitch na tela
     return null;

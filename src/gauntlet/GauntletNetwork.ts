@@ -1,25 +1,22 @@
-import { vec3 } from "wgpu-matrix";
+import { utils, vec3 } from "wgpu-matrix";
 import { Behaviour } from "../behaviour"
 import PrefabFabricator from "../PrefabFabricator";
 import { JoinRequest } from "./dto/JoinMessage";
 import { Node } from "../node";
+import { SpotLight } from "../Light";
 import { store } from "../redux/store";
 import type { EntityDto, GameServerMessage, MapSyncMessage } from "./dto/ServerMessage";
+import type { PlayerControllerSettingsDto } from "./dto/PlayerControllerSettingsDto";
 import { destroyInstance } from "../prefab";
 import MineAvatarBehaviour from "./MineAvatarBehaviour";
 import NetworkedEntityBehaviour from "./NetworkedEntityBehaviour";
 import CameraFollowBehaviour from "./CameraFollowBehaviour";
 
+
 //yaw chega do server em RADIANOS (Math.atan2 java); node.eulerAngles do
 //client quer GRAUS (ver node.ts, quat.fromEuler) — a conversão mora aqui,
 //não do lado do server, que não devia saber nada de convenção de client.
 const RAD_TO_DEG = 180 / Math.PI;
-
-//Mesmo raio do server (GameLoop.PLAYER_RADIUS) — TEM que bater, senão a
-//predição local anda por onde o server nunca deixaria, e o pawn "afunda"
-//visualmente na parede até o próximo snap corrigir (o tremor rápido que
-//isto existe pra evitar).
-const PLAYER_RADIUS_CELLS = 0.3;
 
 class InstanceData {
     public readonly myId:number;
@@ -52,6 +49,17 @@ export default class GauntletNetworkBehaviour extends Behaviour{
     //Os ritos de conexão já foram disparados? (o update roda todo frame e a
     //flag do redux fica true pra sempre — sem isto seria um socket por frame)
     private connectionStarted = false;
+    //Parâmetros de movimento do server (GameLoop/PlayerControllerSettings) —
+    //buscados por GET /api/player-controller-settings em connectSignaling(),
+    //ANTES de abrir qualquer socket, então MineAvatarBehaviour (que só nasce
+    //depois do stateSync, bem mais tarde no fluxo) já lê os valores reais.
+    //Os números aqui são só fallback se o fetch falhar (ver catch) — nunca
+    //deveriam ser o que está de fato em uso.
+    moveSpeedForward = 3.0;
+    moveSpeedBackward = 1.5;
+    accel = 20.0;
+    angularVelocityDegPerSec = 90.0;
+    playerRadius = 0.3;
     private fabricator!: PrefabFabricator;
     private readonly tileWidth:number;
     private readonly tileHeight:number;
@@ -87,13 +95,15 @@ export default class GauntletNetworkBehaviour extends Behaviour{
         //(GauntletLoginPanel), e o gatilho é a flag no redux — ver update().
     }
 
-    //Chamado pela MineAvatarBehaviour a 20 Hz. Ignorado silenciosamente
+    //Chamado pela MineAvatarBehaviour a 20 Hz. turn/move são relativos à
+    //orientação atual (giro e andar-na-direção-que-olha, não eixos de
+    //mundo) — ver MineAvatarBehaviour.currentIntent. Ignorado silenciosamente
     //antes do wsGame abrir — não deveria acontecer (a behaviour só existe
     //depois do stateSync, que já implica socket aberto), mas closed/connecting
     //jogariam no send() e derrubariam o socket.
-    sendInput(dx: number, dz: number): void {
+    sendInput(turn: number, move: number): void {
         if (this.wsGame?.readyState !== WebSocket.OPEN) return;
-        this.wsGame.send(JSON.stringify({ operation: "input", seq: this.inputSeq++, dx, dz }));
+        this.wsGame.send(JSON.stringify({ operation: "input", seq: this.inputSeq++, turn, move }));
     }
 
     /** Delta em CÉLULAS (espaço do server/da predição) → delta em unidades-
@@ -104,10 +114,34 @@ export default class GauntletNetworkBehaviour extends Behaviour{
         return [dCellsX * this.tileWidth, dCellsZ * this.tileHeight];
     }
 
-    //Os ritos de entrada: signaling (join = reserva de vaga) e, com o ok, o
-    //socket de jogo. Pressupõe sessão já autenticada — o POST /login foi
-    //feito pela UI e os handshakes WS herdam o cookie.
+    //Os ritos de entrada: primeiro os parâmetros de movimento (GET, só depois
+    //disso resolver é que abre QUALQUER socket — ver openSignalingSocket),
+    //depois signaling (join = reserva de vaga) e, com o ok, o socket de jogo.
+    //Pressupõe sessão já autenticada — o POST /login foi feito pela UI e o
+    //fetch/handshakes WS herdam o cookie.
     private connectSignaling(): void {
+        fetch("/api/player-controller-settings")
+            .then(res => {
+                if (!res.ok) throw new Error(`GET /api/player-controller-settings: HTTP ${res.status}`);
+                return res.json() as Promise<PlayerControllerSettingsDto>;
+            })
+            .then(settings => {
+                this.moveSpeedForward = settings.moveSpeedForward;
+                this.moveSpeedBackward = settings.moveSpeedBackward;
+                this.accel = settings.accel;
+                this.angularVelocityDegPerSec = settings.angularVelocityDegPerSec;
+                this.playerRadius = settings.playerRadius;
+            })
+            .catch(err => {
+                //Sem isto o login travaria mudo se o fetch falhasse (connectionStarted
+                //já virou true no update(), nunca mais tenta de novo). Loga alto e
+                //segue com os defaults hardcoded acima em vez de travar o jogador.
+                console.error("GauntletNetwork: falha buscando player-controller-settings, seguindo com os defaults", err);
+            })
+            .finally(() => this.openSignalingSocket());
+    }
+
+    private openSignalingSocket(): void {
         this.wsSignaling = new WebSocket(`ws://${location.host}/ws/signaling`);
         this.wsSignaling.onopen = ()=>this.wsSignaling.send(JSON.stringify(JoinRequest));
         this.wsSignaling.onmessage = e=> {
@@ -118,7 +152,7 @@ export default class GauntletNetworkBehaviour extends Behaviour{
             }
         }
     }
-    
+
     dispose(): void {
         this.wsGame?.close();
         this.wsSignaling?.close();
@@ -219,6 +253,26 @@ export default class GauntletNetworkBehaviour extends Behaviour{
             //livre pra eventual lógica de animação futura sem competir por
             //quem é dono do transform.
             this.fabricator.fabricate([0, 0, 0], isMine ? "alice" : "bob", pivot);
+
+            //Luz fraca acima do player: cada avatar carrega sua própria
+            //spotlight, apontada pra baixo, reforçando o char perto do chão
+            //sem depender só da luz de teto (ver gauntletWorld.ts). Filha do
+            //pivot: acompanha posição/yaw automaticamente.
+            const headLight = new Node();
+            headLight.name = "PlayerLight";
+            headLight.setParent(pivot);
+            vec3.set(0, 8, 0, headLight.position);
+            const spot = new SpotLight();
+            spot.color = [1, 0.95, 0.85];
+            spot.intensity = 3; //fraquinha de propósito
+            spot.innerConeAngle = utils.degToRad(30);
+            spot.outerConeAngle = utils.degToRad(60);
+            headLight.light = spot;
+            //aponta o -Z pra baixo (convenção do Camera/lookAt) — up não pode
+            //ser (0,1,0) aqui: seria paralelo à direção e degenera o lookAt.
+            const eye = headLight.getWorldMatrix();
+            headLight.lookAt(vec3.create(eye[12], eye[13] - 1, eye[14]), vec3.create(0, 0, 1));
+
             //NetworkedEntityBehaviour: TODA entidade de rede tem (reconciliação
             //por snap + dead reckoning) — hoje só player, amanhã monstro/tesouro
             //igual. MineAvatarBehaviour é o extra só de QUEM SOU EU (input +
@@ -326,7 +380,7 @@ export default class GauntletNetworkBehaviour extends Behaviour{
      *  (GameLoop.isFree). Usada pela predição local (MineAvatarBehaviour)
      *  pra nunca prever um passo que o server rejeitaria. */
     isFreeAtCells(xCells: number, zCells: number): boolean {
-        const r = PLAYER_RADIUS_CELLS;
+        const r = this.playerRadius;
         return this.isWalkableCell(Math.floor(xCells - r), Math.floor(zCells - r))
             && this.isWalkableCell(Math.floor(xCells + r), Math.floor(zCells - r))
             && this.isWalkableCell(Math.floor(xCells - r), Math.floor(zCells + r))

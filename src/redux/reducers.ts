@@ -2,7 +2,7 @@
 //switch e spread — sem toolkit, sem immer.
 import { combineReducers } from "redux";
 import type { CtfPoint } from "../ctf";
-import { CTF_SET_POINTS, GAUNTLET_LOGIN_SUCCEEDED, HELLO_CLICKED, ORBIT_CAMERA, SET_ALPHA_SCALE, SET_CTF_HU_RANGE, SET_DEBUG_VIEW_ACTIVE, SET_RAYCAST_ESS, SET_RAYCAST_ESS_DEBUG, SET_RAYCAST_FRAMEBUFFER_SCALE, SET_RAYCAST_GRADIENT_MODE, SET_RAYCAST_GRADIENT_SHADING, SWITCH_WORLD, TEXTURE_BASED_CT_SET_NUM_SLICES, ZOOM_CAMERA, type AppAction, type GradientMode, type WorldName } from "./actions";
+import { CTF_SET_POINTS, GAUNTLET_LOGIN_SUCCEEDED, HELLO_CLICKED, ORBIT_CAMERA, SET_ALPHA_SCALE, SET_CTF_HU_RANGE, SET_DEBUG_VIEW_ACTIVE, SET_GAUNTLET_SHADOW_MAP_SIZE, SET_RAYCAST_ESS, SET_RAYCAST_ESS_DEBUG, SET_RAYCAST_FRAMEBUFFER_SCALE, SET_RAYCAST_GRADIENT_MODE, SET_RAYCAST_GRADIENT_SHADING, SWITCH_WORLD, TEXTURE_BASED_CT_SET_NUM_SLICES, ZOOM_CAMERA, type AppAction, type GradientMode, type WorldName } from "./actions";
 
 export interface HelloState {
     /** Quantas vezes o botão de hello foi clicado. */
@@ -85,6 +85,11 @@ export interface GauntletState {
     username: string;
     //O gatilho que a behaviour espera pra conectar.
     loggedIn: boolean;
+    //Resolução (px, quadrado) dos shadow maps de spot/directional — o
+    //GauntletWorld lê no update() e manda a GauntletLighting redimensionar
+    //os render targets (ver gauntletLighting.ts/gauntletWorld.ts). Default
+    //igual ao DEFAULT_SHADOW_MAP_SIZE de lá — mantenha os dois em sync.
+    shadowMapSize: number;
 }
 
 const helloInitial: HelloState = {
@@ -94,6 +99,7 @@ const helloInitial: HelloState = {
 const gauntletInitial: GauntletState = {
     username: "",
     loggedIn: false,
+    shadowMapSize: 512,
 };
 
 const baseInitial: BaseState = {
@@ -178,6 +184,8 @@ function gauntletReducer(state: GauntletState = gauntletInitial, action: AppActi
     switch (action.type) {
         case GAUNTLET_LOGIN_SUCCEEDED:
             return { ...state, username: action.payload.username, loggedIn: true };
+        case SET_GAUNTLET_SHADOW_MAP_SIZE:
+            return { ...state, shadowMapSize: action.payload };
         default:
             return state;
     }

@@ -22,7 +22,7 @@ import { World } from "../world";
 import { Node } from "../node";
 import { Mesh } from "../mesh";
 import { Renderable, RenderPassBit } from "../renderable";
-import { Light } from "../Light";
+import { PointLight } from "../Light";
 import { loadGltf } from "../gltfLoader";
 import { registerMaterial } from "../material";
 import { MainRenderPass } from "../StarshipDemo/mainRenderPass";
@@ -78,7 +78,7 @@ export class GameVolumeWorld extends World {
         //certo é o material expor a potência — hoje ela é fixa.)
         const light = new Node();
         light.name = "Light0";
-        light.light = new Light();
+        light.light = new PointLight();
         this.rootNode.addChild(light);
         light.addBehaviour(new OrbitLightBehaviour(vec3.create(0, 0, 0), 120, 150, 0.35));
 

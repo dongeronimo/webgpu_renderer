@@ -42,8 +42,9 @@ public class Instance {
     private final Map<Long, WebSocketSession> sessions = new HashMap<>();
     private long nextEntityId = 1;
     /**
-     * entityId → última intenção de movimento recebida ([dx,dz], eixos
-     * crus). Resolvida de playerId pra entityId no drain do PlayerInput
+     * entityId → última intenção de movimento recebida ([turn,move], eixos
+     * crus e relativos à orientação atual — não mais eixos de mundo).
+     * Resolvida de playerId pra entityId no drain do PlayerInput
      * (GameLoop.onPlayerInput) — o passo de movimento só lê daqui, nunca da
      * fila. Ausente = parado (nunca recebeu input, ou nunca vai receber:
      * kind != player). Só a game thread toca.

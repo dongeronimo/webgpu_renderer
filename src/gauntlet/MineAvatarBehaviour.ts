@@ -8,14 +8,6 @@ import type GauntletNetworkBehaviour from "./GauntletNetwork";
 //não dá drift se um frame atrasar um pouco.
 const INPUT_INTERVAL_SECONDS = 1 / 20;
 
-//Espelham GameLoop.java (MOVE_SPEED/ACCEL/TURN_RATE) — a predição local só
-//fica parecida com o que o server vai devolver se rodar a MESMA regra de
-//movimento. Não precisa ser bit-exato: o snap corrige o resto por blend
-//(ver GauntletNetwork.SNAP_BLEND). Se a sensação mudar no server, mudar aqui
-//também.
-const MOVE_SPEED = 3.0;
-const ACCEL = 20.0;
-const TURN_RATE_DEG_PER_SEC = 540.0;
 const RAD_TO_DEG = 180 / Math.PI;
 
 /** Anda `current` até `target`, no máximo `maxDelta` por chamada — mesma
@@ -24,14 +16,6 @@ function moveToward(current: number, target: number, maxDelta: number): number {
     const diff = target - current;
     if (Math.abs(diff) <= maxDelta) return target;
     return current + Math.sign(diff) * maxDelta;
-}
-
-/** Gira `currentDeg` rumo a `targetDeg` pelo caminho mais curto, no máximo
- *  `maxDeltaDeg` por chamada — mesma função do server (GameLoop.rotateToward). */
-function rotateTowardDeg(currentDeg: number, targetDeg: number, maxDeltaDeg: number): number {
-    const delta = (((targetDeg - currentDeg + 180) % 360 + 360) % 360) - 180;
-    if (Math.abs(delta) <= maxDeltaDeg) return currentDeg + delta;
-    return currentDeg + Math.sign(delta) * maxDeltaDeg;
 }
 
 /**
@@ -70,42 +54,51 @@ export default class MineAvatarBehaviour extends Behaviour {
         window.removeEventListener("keyup", this.onKeyUp);
     }
 
-    //dz negativo = norte (longe da câmera, ver serverToWorldZ/onMapSync);
-    //se W andar pra trás na demo, é só inverter os sinais aqui.
+    //turn: gira o pawn (A=+1/D=-1) — sinal é um CHUTE a partir da convenção
+    //"dz negativo = norte" (ver comentário do forward em update()); se A/D
+    //girarem pro lado errado na tela, inverte o sinal AQUI e em
+    //GameLoop.stepMovement junto (mesmo cuidado do W abaixo).
+    //move: anda na direção que o pawn ESTÁ olhando (W=+1 pra frente,
+    //S=-1 pra trás) — se W andar pra trás na demo, é só inverter os sinais.
     private currentIntent(): [number, number] {
-        let dx = 0;
-        let dz = 0;
-        if (this.keysDown.has("KeyW") || this.keysDown.has("ArrowUp")) dz -= 1;
-        if (this.keysDown.has("KeyS") || this.keysDown.has("ArrowDown")) dz += 1;
-        if (this.keysDown.has("KeyD") || this.keysDown.has("ArrowRight")) dx += 1;
-        if (this.keysDown.has("KeyA") || this.keysDown.has("ArrowLeft")) dx -= 1;
-        return [dx, dz];
+        let turn = 0;
+        let move = 0;
+        if (this.keysDown.has("KeyA") || this.keysDown.has("ArrowLeft")) turn += 1;
+        if (this.keysDown.has("KeyD") || this.keysDown.has("ArrowRight")) turn -= 1;
+        if (this.keysDown.has("KeyW") || this.keysDown.has("ArrowUp")) move += 1;
+        if (this.keysDown.has("KeyS") || this.keysDown.has("ArrowDown")) move -= 1;
+        return [turn, move];
     }
 
     update(deltaTime: number): void {
-        const [dx, dz] = this.currentIntent();
-        const mag = Math.hypot(dx, dz);
+        const [turn, move] = this.currentIntent();
 
-        //---- yaw: gira rumo ao INPUT (não à velocidade), taxa limitada — já
-        //começa a virar mesmo ainda freando da direção anterior, em vez de
-        //ficar preso no ângulo antigo até a velocidade cruzar zero e aí
-        //saltar instantâneo pro oposto. Parado (sem intent): não vira.
-        if (mag > 1e-6) {
-            const targetYawDeg = Math.atan2(dx, dz) * RAD_TO_DEG;
-            const maxTurnDeg = TURN_RATE_DEG_PER_SEC * deltaTime;
-            this.node.eulerAngles = vec3.create(
-                0,
-                rotateTowardDeg(this.node.eulerAngles[1], targetYawDeg, maxTurnDeg),
-                0,
-            );
+        //---- yaw: agora é ESTADO PERSISTENTE, girado por A/D a ritmo
+        //constante — funciona parado (turn independe de move). Valores vêm
+        //de GauntletNetwork (buscados via GET /api/player-controller-settings
+        //em connectSignaling(), ANTES de qualquer pawn nascer — ver lá).
+        if (turn !== 0) {
+            const newYawDeg = this.node.eulerAngles[1] + turn * this.network.angularVelocityDegPerSec * deltaTime;
+            this.node.eulerAngles = vec3.create(0, newYawDeg, 0);
         }
+
+        //---- vetor forward a partir do yaw CORRENTE — mesma convenção do
+        //antigo atan2(dx,dz)==yaw (dx=sin(yaw), dz=cos(yaw)), só que agora
+        //indo do ângulo pro vetor. W(move=+1) anda nele, S(move=-1) anda no
+        //oposto, sem virar o pawn.
+        const yawRad = this.node.eulerAngles[1] / RAD_TO_DEG;
+        const forwardX = Math.sin(yawRad);
+        const forwardZ = Math.cos(yawRad);
 
         //---- predição local: mesma regra de aceleração do server, rodando a
         //CADA FRAME (não só nos 20Hz do envio) — desliza suave até o alvo em
-        //vez de saltar entre as 8 direções.
-        const targetVelX = mag > 1e-6 ? (dx / mag) * MOVE_SPEED : 0;
-        const targetVelZ = mag > 1e-6 ? (dz / mag) * MOVE_SPEED : 0;
-        const maxDelta = ACCEL * deltaTime;
+        //vez de saltar direto pra ele. move>=0 (W ou parado) usa a velocidade
+        //de frente, move<0 (S) usa a de trás (mais lenta) — espelha
+        //GameLoop.stepMovement.
+        const moveSpeed = move >= 0 ? this.network.moveSpeedForward : this.network.moveSpeedBackward;
+        const targetVelX = forwardX * move * moveSpeed;
+        const targetVelZ = forwardZ * move * moveSpeed;
+        const maxDelta = this.network.accel * deltaTime;
         this.velX = moveToward(this.velX, targetVelX, maxDelta);
         this.velZ = moveToward(this.velZ, targetVelZ, maxDelta);
 
@@ -135,12 +128,12 @@ export default class MineAvatarBehaviour extends Behaviour {
             this.node.position[2] = this.network.serverToWorldZ(finalZ);
         }
 
-        //---- envio pro server: só a 20Hz — manda a intenção CRUA (dx,dz); o
-        //server tem sua PRÓPRIA cópia de MOVE_SPEED/ACCEL/TURN_RATE e roda a
+        //---- envio pro server: só a 20Hz — manda a intenção CRUA (turn,move);
+        //o server tem sua PRÓPRIA cópia de MOVE_SPEED/ACCEL/TURN_RATE e roda a
         //mesma simulação (spec: "input, não posição" — nunca a predição local).
         this.accumSeconds += deltaTime;
         if (this.accumSeconds < INPUT_INTERVAL_SECONDS) return;
         this.accumSeconds -= INPUT_INTERVAL_SECONDS;
-        this.network.sendInput(dx, dz);
+        this.network.sendInput(turn, move);
     }
 }

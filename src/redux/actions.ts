@@ -51,6 +51,10 @@ export const SET_RAYCAST_ESS_DEBUG = "SET_RAYCAST_ESS_DEBUG";
 //do fetch, e o devtools do redux mostra o store inteiro). A
 //GauntletNetworkBehaviour lê a flag no update() e dispara signaling+game.
 export const GAUNTLET_LOGIN_SUCCEEDED = "GAUNTLET_LOGIN_SUCCEEDED";
+//Resolução dos shadow maps de spot/directional (px, quadrado). A UI escreve
+//(campo de texto); o GauntletWorld lê no update() (padrão lastSeen) e manda
+//a GauntletLighting redimensionar os render targets — ver gauntletWorld.ts.
+export const SET_GAUNTLET_SHADOW_MAP_SIZE = "SET_GAUNTLET_SHADOW_MAP_SIZE";
 
 //Como o gradiente é obtido. "precalculated": uma textura 3D de gradientes
 //gerada uma vez (rápido no raymarch, custa VRAM e um pré-passo). "on-the-fly":
@@ -143,6 +147,11 @@ export interface GauntletLoginSucceededAction {
     payload: { username: string };
 }
 
+export interface SetGauntletShadowMapSizeAction {
+    type: typeof SET_GAUNTLET_SHADOW_MAP_SIZE;
+    payload: number;
+}
+
 export function helloClicked(): HelloClickedAction {
     return { type: HELLO_CLICKED };
 }
@@ -203,6 +212,10 @@ export function gauntletLoginSucceeded(username: string): GauntletLoginSucceeded
     return { type: GAUNTLET_LOGIN_SUCCEEDED, payload: { username } };
 }
 
+export function setGauntletShadowMapSize(size: number): SetGauntletShadowMapSizeAction {
+    return { type: SET_GAUNTLET_SHADOW_MAP_SIZE, payload: size };
+}
+
 //União de todas as actions da app — cresce conforme a UI cresce. TODO
 //reducer é tipado com ela: no redux, todo reducer recebe TODA action e
 //ignora (default) as que não conhece.
@@ -221,4 +234,5 @@ export type AppAction =
     | SetRaycastFramebufferScaleAction
     | SetRaycastEssAction
     | SetRaycastEssDebugAction
-    | GauntletLoginSucceededAction;
+    | GauntletLoginSucceededAction
+    | SetGauntletShadowMapSizeAction;

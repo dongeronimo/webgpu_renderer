@@ -12,7 +12,7 @@ import { loadCubemapTexture } from "../textureLoader";
 import { Node } from "../node";
 import { PhongColorMaterial } from "./PhongColorMaterial";
 import { registerMaterial } from "../material";
-import { Light } from "../Light";
+import { PointLight } from "../Light";
 import { DoubleSidedPhongMaterial } from "./DoubleSidedPhongMaterial";
 import { registerBehaviour } from "../behaviour";
 import { MoveShipBehaviour } from "./MoveShipBehaviour";
@@ -88,7 +88,7 @@ export class StarshipDemoWorld extends World {
         this.light0 = new Node();
         this.light0.name = "Light0";
         vec3.set(60, 100, 60, this.light0.position);
-        this.light0.light = new Light();
+        this.light0.light = new PointLight();
         this.rootNode.addChild(this.light0);
         //- Cria a câmera. O glb também não traz câmera, então criamos uma que
         //  enquadra a nave inteira (bbox ~30x18x60, centro ~ (0, 9, 1)) numa

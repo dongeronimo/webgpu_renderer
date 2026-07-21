@@ -42,6 +42,17 @@
 			<groupId>org.springframework.boot</groupId>
 			<artifactId>spring-boot-starter-security</artifactId>
 		</dependency>
+		<dependency>
+			<groupId>org.springframework.boot</groupId>
+			<artifactId>spring-boot-starter-data-jpa</artifactId>
+		</dependency>
+		<!-- sem scope=runtime: o Boot 4 removeu o H2ConsoleAutoConfiguration
+		     que existia até o 3.x, então H2ConsoleConfig registra o
+		     org.h2.server.web.WebServlet na mão e precisa dele em compile-time -->
+		<dependency>
+			<groupId>com.h2database</groupId>
+			<artifactId>h2</artifactId>
+		</dependency>
 
 		<dependency>
 			<groupId>org.springframework.boot</groupId>

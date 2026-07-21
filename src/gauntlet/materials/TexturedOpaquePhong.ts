@@ -11,16 +11,45 @@ import { MeshType, StaticMesh, SkinnedMesh } from "../../mesh";
  * do TIPO, e o produto degenera pra cor pura. Com textura, a cor vira tint
  * (o default branco = sem tint). Um pipeline só cobre os quatro combos.
  *
- * Espera do render pass (MainRenderPass) os grupos 0 (Frame: view, proj,
- * cameraPos, light0Pos) e 1 (ObjectData[]: model, normalMatrix), então só
- * funciona nesse pass — não no MeshRenderPass comum.
+ * Espera do render pass (GauntletMainRenderPass) os grupos 0 (Frame + os 3
+ * storage buffers de luz — ver gauntletLighting.ts) e 1 (ObjectData[]:
+ * model, normalMatrix), então só funciona nesse pass.
  */
 const TEXTURED_OPAQUE_PHONG_WGSL = /* wgsl */ `
 struct Frame {
     view: mat4x4f,
     proj: mat4x4f,
     cameraPos: vec4f,
-    light0Pos: vec4f,
+    lightCounts: vec4u, //x=numPoint, y=numSpot, z=numDirectional, w=reservado
+};
+struct PointLight {
+    position: vec3f,
+    intensity: f32,
+    color: vec3f,
+    _pad0: f32,
+};
+struct SpotLight {
+    position: vec3f,
+    intensity: f32,
+    direction: vec3f,
+    cosOuter: f32,
+    color: vec3f,
+    cosInner: f32,
+    shadowViewProj: mat4x4f,
+    //3 escalares, NÃO um vec3f: vec3f exige alinhamento de 16 bytes e
+    //empurraria o campo (e o tamanho do struct inteiro) 12 bytes adiante,
+    //dessincronizando do stride calculado no lado da CPU (FLOATS_PER_SPOT).
+    shadowIndex: f32,
+    _pad0: f32,
+    _pad1: f32,
+    _pad2: f32,
+};
+struct DirectionalLight {
+    direction: vec3f,
+    intensity: f32,
+    color: vec3f,
+    shadowIndex: f32,
+    shadowViewProj: mat4x4f,
 };
 struct ObjectData {
     model: mat4x4f,
@@ -33,11 +62,46 @@ struct MaterialParams {
     ambient: vec3f,
 };
 @group(0) @binding(0) var<uniform> frame: Frame;
+@group(0) @binding(1) var<storage, read> pointLights: array<PointLight>;
+@group(0) @binding(2) var<storage, read> spotLights: array<SpotLight>;
+@group(0) @binding(3) var<storage, read> directionalLights: array<DirectionalLight>;
+@group(0) @binding(4) var spotShadowMap: texture_depth_2d_array;
+@group(0) @binding(5) var directionalShadowMap: texture_depth_2d_array;
+@group(0) @binding(6) var shadowSampler: sampler_comparison;
 @group(1) @binding(0) var<storage, read> objects: array<ObjectData>;
 @group(2) @binding(0) var<uniform> material: MaterialParams;
 @group(2) @binding(1) var texSampler: sampler;
 @group(2) @binding(2) var diffuseTex: texture_2d<f32>;
 @group(2) @binding(3) var specularTex: texture_2d<f32>;
+
+fn sampleShadowPCF(map: texture_depth_2d_array, layer: i32, uv: vec2f, refDepth: f32) -> f32 {
+    let dims = textureDimensions(map);
+    let texel = 1.0 / vec2f(f32(dims.x), f32(dims.y));
+    var sum = 0.0;
+    for (var dx = -1; dx <= 1; dx = dx + 1) {
+        for (var dy = -1; dy <= 1; dy = dy + 1) {
+            //Level (não Compare puro): a versão sem LOD explícito só pode
+            //ser chamada em fluxo de controle uniforme, e isto está dentro
+            //de 2 loops (o das luzes + o do PCF) — ilegal. Shadow map não
+            //tem mipmap mesmo, então nível 0 é sempre o certo.
+            sum = sum + textureSampleCompareLevel(map, shadowSampler, uv + vec2f(f32(dx), f32(dy)) * texel, layer, refDepth);
+        }
+    }
+    return sum / 9.0;
+}
+
+fn shadowFactor(worldPos: vec3f, shadowViewProj: mat4x4f, shadowIndex: f32, map: texture_depth_2d_array) -> f32 {
+    let clip = shadowViewProj * vec4f(worldPos, 1.0);
+    if (clip.w <= 0.0) {
+        return 1.0;
+    }
+    let ndc = clip.xyz / clip.w;
+    if (ndc.x < -1.0 || ndc.x > 1.0 || ndc.y < -1.0 || ndc.y > 1.0 || ndc.z < 0.0 || ndc.z > 1.0) {
+        return 1.0;
+    }
+    let uv = vec2f(ndc.x * 0.5 + 0.5, 0.5 - ndc.y * 0.5);
+    return sampleShadowPCF(map, i32(shadowIndex), uv, ndc.z);
+}
 
 struct VsOut {
     @builtin(position) position: vec4f,
@@ -67,38 +131,60 @@ fn vs(
 
 @fragment
 fn fs(in: VsOut) -> @location(0) vec4f {
-    let light0Intensity = vec3f(1.0, 1.0, 1.0); //TODO fazer isso ser propriedade do frame
-    //mesma potência global calibrada do PhongColorMaterial (TODO idem: frame/luz)
-    let light0Power = 250.0;
-
     //textura × cor: com a branca 1×1 no lugar da textura ausente isto é a cor pura
     let albedo = textureSample(diffuseTex, texSampler, in.uv) * material.diffuseColor;
     let specTint = textureSample(specularTex, texSampler, in.uv).rgb * material.specularColor;
 
     //a interpolação entre vértices desnormaliza — renormaliza por fragmento
     let N = normalize(in.worldNormal);
+    let V = normalize(frame.cameraPos.xyz - in.worldPosition);
 
-    //vetor até a luz + atenuação. length dá a distância; reaproveito pra normalizar
-    var lightDir = frame.light0Pos.xyz - in.worldPosition;
-    let distance = length(lightDir);
-    lightDir = lightDir / distance;
-    let attenuation = light0Power / distance; //linear; troque por /(distance*distance) pra 1/d² físico
+    var diffuse = vec3f(0.0);
+    var specular = vec3f(0.0);
 
-    //difuso (Lambert)
-    let NdotL = saturate(dot(N, lightDir));
-    let diffuse = NdotL * light0Intensity * attenuation;
+    for (var i = 0u; i < frame.lightCounts.x; i = i + 1u) {
+        let light = pointLights[i];
+        var L = light.position - in.worldPosition;
+        let dist = length(L);
+        L = L / dist;
+        let atten = light.intensity / dist; //linear; troque por /(dist*dist) pra 1/d² físico
+        let NdotL = saturate(dot(N, L));
+        let H = normalize(L + V);
+        let spec = select(0.0, pow(saturate(dot(N, H)), material.shininess), NdotL > 0.0);
+        diffuse += NdotL * light.color * atten;
+        specular += spec * light.color * atten;
+    }
 
-    //especular (Blinn-Phong: half-vector entre luz e câmera)
-    let viewDir = normalize(frame.cameraPos.xyz - in.worldPosition);
-    let h = normalize(lightDir + viewDir);
-    let NdotH = saturate(dot(N, h));
-    //só há brilho onde a face vê a luz (NdotL>0), senão o especular vaza no lado escuro
-    let specularIntensity = select(0.0, pow(NdotH, material.shininess), NdotL > 0.0);
-    let specular = specularIntensity * light0Intensity * attenuation * specTint;
+    for (var i = 0u; i < frame.lightCounts.y; i = i + 1u) {
+        let light = spotLights[i];
+        var L = light.position - in.worldPosition;
+        let dist = length(L);
+        L = L / dist;
+        let atten = light.intensity / dist;
+        let cosAngle = dot(light.direction, -L);
+        let cone = smoothstep(light.cosOuter, light.cosInner, cosAngle);
+        let NdotL = saturate(dot(N, L));
+        let H = normalize(L + V);
+        let spec = select(0.0, pow(saturate(dot(N, H)), material.shininess), NdotL > 0.0);
+        let shadow = shadowFactor(in.worldPosition, light.shadowViewProj, light.shadowIndex, spotShadowMap);
+        diffuse += NdotL * light.color * atten * cone * shadow;
+        specular += spec * light.color * atten * cone * shadow;
+    }
+
+    for (var i = 0u; i < frame.lightCounts.z; i = i + 1u) {
+        let light = directionalLights[i];
+        let L = -light.direction;
+        let NdotL = saturate(dot(N, L));
+        let H = normalize(L + V);
+        let spec = select(0.0, pow(saturate(dot(N, H)), material.shininess), NdotL > 0.0);
+        let shadow = shadowFactor(in.worldPosition, light.shadowViewProj, light.shadowIndex, directionalShadowMap);
+        diffuse += NdotL * light.color * light.intensity * shadow;
+        specular += spec * light.color * light.intensity * shadow;
+    }
 
     //ambiente MULTIPLICA o albedo (difere do PhongColorMaterial, que soma cru):
     //ambiente aditivo apagaria a textura nas áreas sem luz direta
-    let litColor = material.ambient * albedo.rgb + diffuse * albedo.rgb + specular;
+    let litColor = material.ambient * albedo.rgb + diffuse * albedo.rgb + specular * specTint;
     return vec4f(litColor, albedo.a);
 }
 `;

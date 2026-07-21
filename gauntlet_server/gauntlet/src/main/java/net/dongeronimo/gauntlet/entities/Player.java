@@ -2,16 +2,29 @@ package net.dongeronimo.gauntlet.entities;
 
 import java.util.Optional;
 
+import jakarta.persistence.Column;
+import jakarta.persistence.Entity;
+import jakarta.persistence.GeneratedValue;
+import jakarta.persistence.GenerationType;
+import jakarta.persistence.Id;
+import jakarta.persistence.Table;
+
+@Entity
+@Table(name = "players")
 public class Player {
+    @Id
+    @GeneratedValue(strategy = GenerationType.IDENTITY)
     private long id;
+    @Column(nullable = false, unique = true)
     private String name;
+    @Column(nullable = false)
     private String password;
     //é como a gente vai amarrar o player ao seu id. null = desconectado.
     //O campo é String crua; Optional é tipo de RETORNO (o getter embrulha) —
     //Optional.of(null) num setter lança NPE.
     private String websocketId;
 
-    
+
     public Player(long id, String name, String password) {
         this.id = id;
         this.name = name;

@@ -11,7 +11,7 @@ import { FinalRenderPass } from "../finalPass";
 import { World } from "../world";
 import { Node } from "../node";
 import { Mesh } from "../mesh";
-import { Light } from "../Light";
+import { PointLight } from "../Light";
 import { loadGltf } from "../gltfLoader";
 import { registerMaterial } from "../material";
 import { MainRenderPass } from "../StarshipDemo/mainRenderPass";
@@ -85,7 +85,7 @@ export class TrainWorld extends World {
         const sceneCenter = vec3.lerp(sceneBox.min, sceneBox.max, 0.5);
         const light = new Node();
         light.name = "Light0";
-        light.light = new Light();
+        light.light = new PointLight();
         vec3.set(
             sceneCenter[0] + 60,
             sceneBox.max[1] + 150,

@@ -19,9 +19,10 @@ public sealed interface InstanceEvent {
     record PlayerLeft(Player player) implements InstanceEvent {}
 
     /**
-     * Intenção de movimento a 20 Hz. dx/dz chegam crus do client — quem
-     * resolve playerId→pawn e guarda como intenção CORRENTE é a game thread
-     * (Instance.intents), não este evento: ele só atravessa a fila.
+     * Intenção de movimento a 20 Hz. turn/move chegam crus do client (giro e
+     * andar relativos à orientação atual) — quem resolve playerId→pawn e
+     * guarda como intenção CORRENTE é a game thread (Instance.intents), não
+     * este evento: ele só atravessa a fila.
      */
-    record PlayerInput(Player player, double dx, double dz, long seq) implements InstanceEvent {}
+    record PlayerInput(Player player, double turn, double move, long seq) implements InstanceEvent {}
 }
