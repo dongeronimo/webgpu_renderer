@@ -44,6 +44,32 @@ export interface SmokeConfig {
     obstacleRange?: number;
 }
 
+/** Uma fonte de fumaça na árvore: o node (transform/proxy) + o cérebro. */
+export interface SmokeSource {
+    node: Node;
+    behaviour: SmokeBehaviour;
+}
+
+/**
+ * Coleta da árvore os nodes com SmokeBehaviour (e um Renderable = o cubo
+ * proxy). Função livre porque TRÊS passes consomem a mesma lista no frame:
+ * a simulação (compute), a transmitância em light-space e o render do volume.
+ */
+export function collectSmokeSources(root: Node): SmokeSource[] {
+    const out: SmokeSource[] = [];
+    const visit = (n: Node) => {
+        const b = n.behaviours.find(x => x instanceof SmokeBehaviour) as SmokeBehaviour | undefined;
+        if (b && n.renderable) {
+            out.push({ node: n, behaviour: b });
+        }
+        for (const c of n.children) {
+            visit(c);
+        }
+    };
+    visit(root);
+    return out;
+}
+
 export class SmokeBehaviour extends Behaviour {
     private readonly device: GPUDevice;
     private readonly grid: number;

@@ -8,13 +8,23 @@
 //depth pra parar a marcha na superfície opaca. Resultado: os blocos que
 //atravessam a fumaça a ocluem, e a fumaça densa oclui os blocos atrás dela.
 //
-//Próximos estágios (roadmap): volume atualizado por compute (advecção real);
-//volume RECEBE sombra da geometria + auto-sombra (shadow map + shadow-ray);
-//volume PROJETA sombra na geometria (transmitância em light-space).
+//Estágios 2 e 3 (SHADING/SOMBRAS — este arquivo hoje): a luz virou SOL
+//(direcional; a point light já estava a dist ~192, era um sol de fato) e o
+//frame ganhou a cadeia de sombras completa:
+//  1. simulação (compute) — a densidade deste frame, ANTES de qualquer sombra;
+//  2. SunShadowPass — shadow map ortho da geometria, do ponto de vista do sol;
+//  3. SmokeTransmittancePass — quanta luz ATRAVESSA a fumaça em cada raio de
+//     sol (a sombra que a fumaça projeta na cena);
+//  4. SunScenePass + SunPhongMaterial — geometria com Phong direcional + PCF
+//     do shadow map + escurecida pela transmitância da fumaça;
+//  5. SmokeVolumePass — fumaça com single scattering: auto-sombra (marcha até
+//     o sol), sombra da geometria (tap no shadow map), fase Henyey-Greenstein
+//     e ambiente. Tudo concorda porque o MESMO Sun (direção + viewProj) é
+//     calculado uma vez por frame e passado a todos.
 //
-//Reusa peças já existentes: MainRenderPass + PhongColorMaterial (forward Phong
-//com 1 luz, da StarshipDemo) pra geometria, OrbitCameraBehaviour (raycaster)
-//pra câmera. Só o pass de fumaça e a cena são novos.
+//Reusa OrbitCameraBehaviour (raycaster) pra câmera; a OrbitLightBehaviour
+//continua movendo o node da luz — daí sai só a DIREÇÃO do sol, então as
+//sombras giram ao vivo na demo.
 import { vec3 } from "wgpu-matrix";
 import { Camera } from "../camera";
 import { FinalRenderPass } from "../finalPass";
@@ -25,29 +35,42 @@ import { Renderable, RenderPassBit } from "../renderable";
 import { Light } from "../Light";
 import { loadGltf } from "../gltfLoader";
 import { registerMaterial } from "../material";
-import { MainRenderPass } from "../StarshipDemo/mainRenderPass";
-import { PhongColorMaterial } from "../StarshipDemo/PhongColorMaterial";
 import { OrbitCameraBehaviour } from "../raycast/orbitCameraBehaviour";
 import { SmokeVolumePass } from "./smokeVolumePass";
 import { OrbitLightBehaviour } from "./orbitLightBehaviour";
 import { SmokeBehaviour } from "./smokeBehaviour";
+import { SunScenePass } from "./sunScenePass";
+import { SunPhongMaterial } from "./sunPhongMaterial";
+import { SunShadowPass } from "./sunShadowPass";
+import { SmokeTransmittancePass } from "./smokeTransmittancePass";
+import { buildSunMatrices, type Sun } from "./sun";
 
 export class GameVolumeWorld extends World {
-    private scenePass!: MainRenderPass;
+    private scenePass!: SunScenePass;
+    private shadowPass!: SunShadowPass;
+    private transmittancePass!: SmokeTransmittancePass;
     private volumePass!: SmokeVolumePass;
     private finalPass!: FinalRenderPass;
     private canvas!: HTMLCanvasElement;
     private cameraNode!: Node;
+    private lightNode!: Node;
     public meshes: Mesh[] = [];
     //O cérebro da fumaça (dono da AdvectionSim), guardado pra dispose na troca
     //de mundo — World.destroy não roda dispose das behaviours.
     private smoke!: SmokeBehaviour;
 
+    //Propriedades do sol (a DIREÇÃO vem do node da luz, que orbita).
+    private readonly sunColor: [number, number, number] = [1.0, 0.97, 0.9];
+    //~a mesma energia da era point light (250/dist≈1.3), sem a atenuação.
+    private readonly sunIntensity = 1.4;
+
     createRenderPasses(canvas: HTMLCanvasElement, canvasFormat: GPUTextureFormat): void {
         this.canvas = canvas;
-        //Geometria opaca (Phong, 1 luz) → cor + depth. "store" no depth pra o
-        //volume pass poder lê-lo (o MainRenderPass já cria o depth amostrável).
-        this.scenePass = new MainRenderPass(this.device, canvasFormat, "clear", "store");
+        //Geometria opaca (Phong direcional + sombras) → cor + depth. "store" no
+        //depth pra o volume pass poder lê-lo (oclusão da fumaça).
+        this.scenePass = new SunScenePass(this.device, canvasFormat, "clear", "store");
+        this.shadowPass = new SunShadowPass(this.device);
+        this.transmittancePass = new SmokeTransmittancePass(this.device);
         this.volumePass = new SmokeVolumePass(this.device, canvasFormat);
         this.finalPass = new FinalRenderPass(this.device, canvas, canvasFormat);
     }
@@ -67,28 +90,23 @@ export class GameVolumeWorld extends World {
         this.rootNode.addChild(this.cameraNode);
         this.cameraNode.addBehaviour(new OrbitCameraBehaviour(vec3.create(0, 0.4, 0)));
 
-        //Luz orbitando — filha DIRETA do root (o MainRenderPass lê a posição
-        //LOCAL do nó de luz). ATENÇÃO à escala: o PhongColorMaterial tem
-        //`light0Power = 250` FIXO no shader (calibrado pra StarshipDemo, luz a
-        //~120u) com atenuação LINEAR (250/distância). Numa cena compacta uma luz
-        //perto (dist ~4) dá atten ~54 → tudo estoura pra branco; virada pra longe,
-        //só o ambiente → quase preto. Por isso a luz fica LONGE (dist ~192 →
-        //atten ~1.3): vira quase um "sol" direcional, o que também é o ideal pra
-        //o shadow map do próximo estágio. (Pra luz de ponto PRÓXIMA de jogo o
-        //certo é o material expor a potência — hoje ela é fixa.)
-        const light = new Node();
-        light.name = "Light0";
-        light.light = new Light();
-        this.rootNode.addChild(light);
-        light.addBehaviour(new OrbitLightBehaviour(vec3.create(0, 0, 0), 120, 150, 0.35));
+        //Luz orbitando — agora só a DIREÇÃO do sol sai daqui (normalize(alvo -
+        //posição)); a distância não importa mais (direcional não atenua). A
+        //órbita fica: sombras da geometria E da fumaça girando ao vivo na demo.
+        this.lightNode = new Node();
+        this.lightNode.name = "Light0";
+        this.lightNode.light = new Light();
+        this.rootNode.addChild(this.lightNode);
+        this.lightNode.addBehaviour(new OrbitLightBehaviour(vec3.create(0, 0, 0), 120, 150, 0.35));
 
         //Materiais da cena (registrados → super.destroy() os libera na troca).
-        //Ambiente ~0.22× da cor base: com UMA luz só, é o fill que impede a face
-        //oposta à luz de ir a preto (metade do "blink" que você viu era isso).
-        const floorMat = new PhongColorMaterial(this.device, [0.55, 0.55, 0.58, 1], [0.12, 0.12, 0.13], 64);
-        const redMat = new PhongColorMaterial(this.device, [0.80, 0.25, 0.20, 1], [0.18, 0.05, 0.04], 128);
-        const blueMat = new PhongColorMaterial(this.device, [0.20, 0.45, 0.80, 1], [0.05, 0.10, 0.18], 128);
-        const greenMat = new PhongColorMaterial(this.device, [0.30, 0.62, 0.35, 1], [0.07, 0.14, 0.08], 128);
+        //SunPhongMaterial: Phong direcional + shadow map (PCF) + sombra da
+        //fumaça (transmitância). Ambiente ~0.22× da cor base segue sendo o fill
+        //que impede a face oposta ao sol de ir a preto.
+        const floorMat = new SunPhongMaterial(this.device, [0.55, 0.55, 0.58, 1], [0.12, 0.12, 0.13], 64);
+        const redMat = new SunPhongMaterial(this.device, [0.80, 0.25, 0.20, 1], [0.18, 0.05, 0.04], 128);
+        const blueMat = new SunPhongMaterial(this.device, [0.20, 0.45, 0.80, 1], [0.05, 0.10, 0.18], 128);
+        const greenMat = new SunPhongMaterial(this.device, [0.30, 0.62, 0.35, 1], [0.07, 0.14, 0.08], 128);
         registerMaterial("floor", floorMat);
         registerMaterial("red", redMat);
         registerMaterial("blue", blueMat);
@@ -152,7 +170,7 @@ export class GameVolumeWorld extends World {
     private addBox(
         name: string,
         mesh: Mesh,
-        material: PhongColorMaterial,
+        material: SunPhongMaterial,
         pos: [number, number, number],
         scale: [number, number, number],
     ): Node {
@@ -171,10 +189,41 @@ export class GameVolumeWorld extends World {
         this.finalPass.resizeIfNeeded();
         const width = this.canvas.width;
         const height = this.canvas.height;
-        //1. Geometria opaca → cor + depth (o depth fica "store" pra o volume ler).
-        this.scenePass.render(encoder, this.rootNode, width, height);
-        //2. Fumaça: o pass COLETA as fontes (nodes com SmokeBehaviour), roda a
-        //sim de cada uma (é quem tem o encoder) e compõe por cima, ocluída pelo depth.
+
+        //0. Simulação PRIMEIRO: os passes de sombra leem a densidade JÁ
+        //advectada deste frame (a barreira compute→render é do WebGPU).
+        this.volumePass.simulate(encoder, this.rootNode);
+
+        //O SOL deste frame: direção do node da luz (worldMatrix fresco — o
+        //update já rodou) + matrizes de light-space. UM Sun pra todos os
+        //passes, senão cada sombra apontaria pra um lado.
+        const lm = this.lightNode.worldMatrix;
+        const { dir, viewProj } = buildSunMatrices(
+            vec3.create(lm[12], lm[13], lm[14]),
+            vec3.create(0, 0, 0),
+        );
+        const sun: Sun = { dir, viewProj, color: this.sunColor, intensity: this.sunIntensity };
+
+        //1. Shadow map: a cena vista do sol (depth-only).
+        this.shadowPass.render(encoder, this.rootNode, sun.viewProj);
+
+        //2. Transmitância da fumaça em light-space (a sombra QUE ELA projeta).
+        //Espelha os tunables do volume pass: sombra e fumaça têm que ser a
+        //MESMA fumaça (mesmo threshold/escala/extinção).
+        this.transmittancePass.sigma = this.volumePass.sigma;
+        this.transmittancePass.coverage = this.volumePass.coverage;
+        this.transmittancePass.densityScale = this.volumePass.densityScale;
+        this.transmittancePass.render(encoder, this.rootNode, sun, this.shadowPass.depthView);
+
+        //3. Geometria opaca → cor + depth, com sombra dura (shadow map) e
+        //sombra da fumaça (transmitância).
+        this.scenePass.render(
+            encoder, this.rootNode, width, height,
+            sun, this.shadowPass.depthView, this.transmittancePass.view,
+        );
+
+        //4. Fumaça: single scattering (auto-sombra + sombra da geometria),
+        //composta por cima, ocluída pelo depth dos opacos.
         this.volumePass.render(
             encoder,
             this.scenePass.colorView,
@@ -183,8 +232,11 @@ export class GameVolumeWorld extends World {
             this.rootNode,
             width,
             height,
+            sun,
+            this.shadowPass.depthView,
         );
-        //3. Composição do offscreen no backbuffer.
+
+        //5. Composição do offscreen no backbuffer.
         this.finalPass.render(encoder, this.scenePass.colorView);
     }
 
@@ -196,6 +248,8 @@ export class GameVolumeWorld extends World {
         this.meshes = [];
         this.smoke.dispose(); //libera a AdvectionSim (World.destroy não roda dispose)
         this.scenePass.destroy();
+        this.shadowPass.destroy();
+        this.transmittancePass.destroy();
         this.volumePass.destroy();
         this.finalPass.destroy();
     }

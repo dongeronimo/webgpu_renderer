@@ -120,6 +120,31 @@
 - With the exception of Fourier-Based techiniques all volume rendering in compact data equates to raymarching with different forms.
   - The differences MATTER.
 
+---
+# Case study - shading the smoke scene
+
+## Surfaces x participating media
+- In medical data (CT) lighting comes from the GRADIENT: density transitions act like surfaces, the gradient is the normal, classic surface shading applies.
+- Smoke has no surface to shade: it's a participating MEDIUM. A smooth advected density field has no useful gradient/normal.
+- What gives the "look of smoke" is answering: how much SUNLIGHT arrives alive at each sample?
+- So the right tool for media is raymarching TOWARDS THE LIGHT and accumulating — not gradients.
+- [TODO imagem: CT com gradient shading ao lado da cena de fumaça]
+
+## Smoke shading (single scattering)
+- At each dense sample of the primary march, a SECOND march towards the sun accumulates optical depth τ → T = exp(-τ). Same Beer-Lambert of the eye ray, now along the light direction = self-shadowing.
+- The light march can be much coarser than the eye march (smoke shadows are soft by nature), with early-out once τ already means total shadow.
+- Geometry also shadows the smoke: 1 shadow map tap per sample.
+- Henyey-Greenstein phase function: preferential FORWARD scattering → "silver lining" when backlit. Directional sun ⇒ constant per pixel, computed once outside the loop.
+- No multiple scattering (too expensive for real time): a constant AMBIENT floor fakes it — real smoke bounces light internally; without the floor the shadowed side turns pitch black.
+- [TODO screenshot da fumaça iluminada: lado do sol claro, barriga escura, contraluz pro silver lining]
+
+## The smoke shadows the scene too
+- Same idea in reverse: a light-space TRANSMITTANCE map, aligned with the sun's shadow map.
+- Per texel, march the smoke along the sun ray and store T = exp(-τ); geometry multiplies its direct light by T.
+- Soft gray shadow, not binary — and multiple smoke sources compose by product (T1·T2·...).
+- The triangle again: shading the medium costs a 2nd march per sample, the cast shadow costs one more 2D map — speed bought with space and less quality (single scattering + tricks, not the full physics).
+- [TODO screenshot da sombra da fumaça projetada no chão/objeto]
+
 --- 
 # Extras
 
