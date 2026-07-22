@@ -1,10 +1,10 @@
-# Gauntlet multiplayer — notas da sessão
+# Gauntlet multiplayer — notas de implementação
 
 Terceira vertical do portfólio: clone do Gauntlet, server-autoritativo, Spring
 Boot (WebSocket cru) + client TypeScript/WebGPU. Spec original em
 `src/instructions/multiplayer.md`. Este arquivo documenta o que foi feito
-numa sessão de push (spawn/despawn/snap → skin renderizando → movimento
-suave) pra quando alguém (você, eu, ou os dois) voltar nisso.
+nesta etapa (spawn/despawn/snap → skin renderizando → movimento
+suave) pra quando for preciso voltar nisso.
 
 **Não é um character controller de verdade.** É o suficiente pra andar,
 virar e trombar em parede de um jeito que não parece quebrado. Character
@@ -73,7 +73,7 @@ implícito servidor↔cliente):
   transformação usada pra mapa E entidades; diverge aqui = pawn fora do
   lugar.
 
-## O que foi corrigido nesta sessão (em ordem)
+## O que foi corrigido nesta etapa (em ordem)
 
 1. **Skin não renderizava.** Dois passes de render (`MainRenderPass` pro
    dungeon, `SkinnedRenderPass` pros avatares) cada um dono da PRÓPRIA
@@ -88,7 +88,7 @@ implícito servidor↔cliente):
    falhava pra TODO fragmento do avatar. Corrigido passando `"store"`
    explícito na construção do `mainPass`.
 3. **Câmera "fodida".** Uma `OrbitCameraBehaviour` (anexada concorrentemente
-   por fora desta sessão) lia o slice GLOBAL do Redux de câmera, calibrado
+   por fora desta etapa) lia o slice GLOBAL do Redux de câmera, calibrado
    pro raycaster de volume em escala unitária (`radius: 2.3`) — no primeiro
    frame ela sequestrava a câmera fixa top-down do Gauntlet pra um raio
    minúsculo perto da origem. Removida.
@@ -177,7 +177,7 @@ implícito servidor↔cliente):
 ## Testes
 
 Suíte Java existente (`gauntlet_server/gauntlet/src/test/`) — 13 testes,
-todos verdes na última rodada desta sessão (`GauntletApplicationTests`,
+todos verdes na última rodada (`GauntletApplicationTests`,
 `ServerMessageSerializationTest`, `GameLoopTest`, `MapGeneratorTest`). Nenhum
-teste novo foi escrito nesta sessão por decisão explícita (tempo curto) —
+teste novo foi escrito nesta etapa por decisão explícita (tempo curto) —
 fica pra quando "der pra sentar e fazer o character controller de verdade".
