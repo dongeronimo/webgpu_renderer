@@ -72,6 +72,26 @@ const DUNGEON_SHADOW_BOUNDS_MAX = vec3.create(35, 20, 35);
 //na hora de compor no backbuffer (esse sim 8-bit, formato do canvas).
 const HDR_COLOR_FORMAT: GPUTextureFormat = "rgba16float";
 
+//Um state de animação de personagem: o par (nome, clip) mais o loop, no
+//formato que AnimatorBehaviour.registerState pede. Vive numa lista (ver
+//HeroAnimSet) em vez de virar param solto de loadHeroes — clip novo no
+//futuro (shoot/die/reload) é só uma entrada a mais, sem mexer em assinatura.
+interface HeroAnimState {
+    //TEM que bater com o `state` que o server manda no snap (GameLoop.
+    //stepMovement → AnimatorBehaviour.playState): "idle"/"walk"/"walkBackward".
+    //Nome errado = playState loga warning e ignora (ver AnimatorBehaviour).
+    name: string;
+    clip: AnimationClip;
+    loop: boolean;
+}
+//Conjunto completo de animações de um personagem. Montado UMA vez em
+//createWorld e passado igual pra cada loadHeroes — a "struct" que o TODO antigo
+//pedia no lugar dos clips soltos.
+interface HeroAnimSet {
+    states: HeroAnimState[];
+    initialState: string;
+}
+
 export class GauntletWorld extends World implements PrefabFabricator {
     private mainPass!: GauntletMainRenderPass;
     private finalPass!: TonemapPass;
@@ -237,21 +257,27 @@ export class GauntletWorld extends World implements PrefabFabricator {
         //e mapSync chega UMA vez (perdeu a corrida = mundo vazio pra sempre).
         await this.loadModularDungeon();
 
-        //Clips de idle/walk/walkBackward — mesmo esqueleto do rig mixamorig:*,
-        //casam por nome sem retargeting (ver animation.ts). UM carregamento só,
-        //compartilhado entre os templates "Dmitry" e "Nat" (AnimationClip é
-        //asset sem ref a Node — ver skinning-system).
-        const idleClip = await this.loadAnimClip("/anims/rifle_idle.glb");
-        const walkClip = await this.loadAnimClip("/anims/rifle_walk_forward.glb");
-        const walkBackwardClip = await this.loadAnimClip("/anims/rifle_walk_backward.glb");
-        //carrega os bonecos de russos — os dois personagens jogáveis (ver
-        //modal de escolha pós-login). O NOME do prefab ("Dmitry"/"Nat") é a
-        //MESMA string que viaja em JoinRequest.character/EntityDto.character
-        //(GauntletNetwork.onEntsAdded fabrica direto por esse nome).
-        await this.loadHeroes("/models/Dmitry.glb", "Dmitry",  idleClip, walkClip, walkBackwardClip);
-        await this.loadHeroes("/models/Nat.glb", "Nat",  idleClip, walkClip, walkBackwardClip);
-        await this.loadHeroes("/models/abi.glb", "Abigail",  idleClip, walkClip, walkBackwardClip);
-        await this.loadHeroes("/models/ramirez.glb", "Ramirez",  idleClip, walkClip, walkBackwardClip);
+        //Clips compartilhados por TODOS os personagens — mesmo esqueleto do rig
+        //mixamorig:*, casam por nome sem retargeting (ver animation.ts). UM
+        //carregamento só, montado num HeroAnimSet e passado igual pra cada
+        //personagem (AnimationClip é asset sem ref a Node — ver skinning-system).
+        //Clip novo no futuro (shoot/die/reload) = mais uma entrada em `states`.
+        const heroAnims: HeroAnimSet = {
+            states: [
+                { name: "idle",         clip: await this.loadAnimClip("/anims/rifle_idle.glb"),          loop: true },
+                { name: "walk",         clip: await this.loadAnimClip("/anims/rifle_walk_forward.glb"),  loop: true },
+                { name: "walkBackward", clip: await this.loadAnimClip("/anims/rifle_walk_backward.glb"), loop: true },
+            ],
+            initialState: "idle",
+        };
+        //carrega os bonecos — os personagens jogáveis (ver modal de escolha
+        //pós-login). O NOME do prefab ("Dmitry"/"Nat"/...) é a MESMA string que
+        //viaja em JoinRequest.character/EntityDto.character (GauntletNetwork.
+        //onEntsAdded fabrica direto por esse nome).
+        await this.loadHeroes("/models/Dmitry.glb",  "Dmitry",  heroAnims);
+        await this.loadHeroes("/models/Nat.glb",     "Nat",     heroAnims);
+        await this.loadHeroes("/models/abi.glb",     "Abigail", heroAnims);
+        await this.loadHeroes("/models/ramirez.glb", "Ramirez", heroAnims);
         
         //adiciona capacidades de rede do world
         this.root.addBehaviour(new GauntletNetworkBehaviour(2,2));
@@ -299,22 +325,19 @@ export class GauntletWorld extends World implements PrefabFabricator {
         return clip;
     }
 
-    //Anexa idle/walk/walkBackward no ROOT do template (armature), ANTES do
-    //Prefab.fromTemplate — mesma convenção de `AnimatorBehaviour.clip`: os
-    //três states são autorados aqui uma vez, cada instância clonada resolve
-    //os PRÓPRIOS bindings no start() (ver AnimatorBehaviour). "walkBackward"
-    //TEM que bater com o nome que GameLoop.stepMovement manda no `state` do
-    //snap, senão playState só loga um warning e ignora (ver AnimatorBehaviour).
-    private attachAnimator(armature: Node, idleClip: AnimationClip, walkClip: AnimationClip, walkBackwardClip: AnimationClip): void {
+    //Anexa os states de `anims` no ROOT do template (armature), ANTES do
+    //Prefab.fromTemplate — os states são autorados aqui uma vez, cada instância
+    //clonada resolve os PRÓPRIOS bindings no start() (ver AnimatorBehaviour).
+    //O nome de cada state TEM que bater com o `state` do snap (ver HeroAnimState).
+    private attachAnimator(armature: Node, anims: HeroAnimSet): void {
         const animator = new AnimatorBehaviour();
-        animator.registerState("idle", idleClip, { loop: true });
-        animator.registerState("walk", walkClip, { loop: true });
-        animator.registerState("walkBackward", walkBackwardClip, { loop: true });
-        animator.initialState = "idle";
+        for (const s of anims.states) {
+            animator.registerState(s.name, s.clip, { loop: s.loop });
+        }
+        animator.initialState = anims.initialState;
         armature.addBehaviour(animator);
     }
-    //TODO refactor: os clips deveriam ficar numa struct ao invés de params soltos
-    private async loadHeroes(file:string, prefabName:string, idleClip: AnimationClip, walkClip: AnimationClip, walkBackwardClip: AnimationClip){
+    private async loadHeroes(file:string, prefabName:string, anims: HeroAnimSet){
         const {roots, nodes, meshes} = await loadGltf(this.device, file);
         this.meshes.push(...meshes); //se não guardar no World vai vazar quando trocar de world.
         //atribui material ao dmitry. 
@@ -329,7 +352,7 @@ export class GauntletWorld extends World implements PrefabFabricator {
         if(!armature) throw new Error(`nó armature não encontrado no ${file}`);
         //detach do mundo pra virar template (prefab)
         armature.setParent(null);
-        this.attachAnimator(armature, idleClip, walkClip, walkBackwardClip);
+        this.attachAnimator(armature, anims);
         const prefab = Prefab.fromTemplate(armature, prefabName);
         this.prefabs.set(prefabName, prefab);
     }
