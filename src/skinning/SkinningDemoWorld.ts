@@ -5,7 +5,7 @@ import { World } from "../world";
 import { loadGltf } from "../gltfLoader";
 import { Mesh } from "../mesh";
 import { Node } from "../node";
-import { Light } from "../Light";
+import { PointLight } from "../Light";
 import { RenderPassBit } from "../renderable";
 import { Prefab } from "../prefab";
 import { registerMaterial } from "../material";
@@ -110,7 +110,7 @@ export class SkinningDemoWorld extends World {
         const light = new Node();
         light.name = "Light0";
         vec3.set(0.4, 0.9, 0.7, light.position);
-        light.light = new Light();
+        light.light = new PointLight();
         this.rootNode.addChild(light);
     }
 

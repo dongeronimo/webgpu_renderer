@@ -247,6 +247,27 @@ export async function loadGltf(device: GPUDevice, url: string): Promise<GltfLoad
       if (!targetNode || !sampler || (rawPath !== "translation" && rawPath !== "rotation" && rawPath !== "scale")) {
         continue;
       }
+      //Sem retargeting neste engine (ver comentário acima: canais casam por
+      //NOME, tocam em QUALQUER instância do mesmo esqueleto) — isso só é
+      //seguro pra ROTAÇÃO, que independe do tamanho do osso. Translation de
+      //um osso NÃO-raiz é o comprimento do segmento (offset até o pai) —
+      //personagens com proporções diferentes (Dmitry ≠ xbot ≠ Nat, cada um
+      //modelado com seu próprio tamanho de braço/perna) têm valores de bind
+      //diferentes pra ESSA MESMA translation, e sobrescrever com o valor do
+      //clip (proporções de QUEM capturou a animação) estica/encolhe o membro
+      //pra bater com o esqueleto ERRADO — testado: chegava a 2× no antebraço
+      //do Dmitry. E o osso RAIZ (ROOT_BONE_NAME) não é exceção seguro: o
+      //valor do clip também carrega a escala do ARMATURE de QUEM capturou
+      //(aqui, 0.01) — aplicado cru sobre o Armature do Dmitry (0.0292, ~3×
+      //maior) desloca o quadril inteiro pra um lugar errado por um fator
+      //parecido. Sem uma rescala explícita por personagem (que não existe),
+      //nenhuma translation de clip é segura — só rotação. Isso custa o bob
+      //vertical sutil de "peso" no idle (puramente cosmético; a POSIÇÃO de
+      //verdade do personagem vem do server via GameLoop/pivot, nunca do
+      //Hips) — troca aceitável por não distorcer o corpo inteiro.
+      if (rawPath === "translation") {
+        continue;
+      }
       const input = sampler.getInput();
       const output = sampler.getOutput();
       if (!input || !output) {

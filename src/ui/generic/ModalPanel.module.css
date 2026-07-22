@@ -1,0 +1,38 @@
+/* Backdrop cobre o container inteiro (mesma área do #ui-root, que é quem
+   dá o position:absolute + inset:0 de referência) e centraliza o conteúdo
+   por flex. Ao contrário do FloatingPanel, aqui pointer-events:auto vai no
+   backdrop INTEIRO, não só no chrome: é modal, clique no "vazio" não pode
+   atravessar pro canvas por baixo. z-index alto pra garantir que fica por
+   cima de qualquer FloatingPanel independente da ordem de montagem. */
+.backdrop {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: rgba(0, 0, 0, 0.55);
+    pointer-events: auto;
+    z-index: 10;
+}
+
+/* Mesma paleta escura do FloatingPanel/Button, mas sem drag/minimize —
+   painel modal não se move nem colapsa. */
+.panel {
+    display: flex;
+    flex-direction: column;
+    background: rgba(20, 20, 20, 0.95);
+    color: #ddd;
+    font: 12px/1.4 monospace;
+    border-radius: 8px;
+    box-shadow: 0 4px 24px rgba(0, 0, 0, 0.6);
+    overflow: hidden;
+    max-width: 90vw;
+    max-height: 90vh;
+}
+
+.content {
+    flex: 1;
+    min-height: 0;
+    overflow: auto;
+    padding: 12px 16px;
+}

@@ -45,6 +45,25 @@ export const SET_RAYCAST_ESS = "SET_RAYCAST_ESS";
 //PiP de debug do ESS: liga/desliga o quadzinho com os cubos dos chunks mantidos.
 //Gateia PASSES de render (lido no render() do world), não é estado de nó.
 export const SET_RAYCAST_ESS_DEBUG = "SET_RAYCAST_ESS_DEBUG";
+//Gauntlet: o form de login (UI) fez o POST /login e o server aceitou — a
+//credencial REAL daqui em diante é o cookie de sessão, não user/senha (por
+//isso a senha nunca entra no state: nenhum consumidor precisa dela depois
+//do fetch, e o devtools do redux mostra o store inteiro). A
+//GauntletNetworkBehaviour lê a flag no update() e dispara signaling+game.
+export const GAUNTLET_LOGIN_SUCCEEDED = "GAUNTLET_LOGIN_SUCCEEDED";
+//Resolução dos shadow maps de spot/directional (px, quadrado). A UI escreve
+//(campo de texto); o GauntletWorld lê no update() (padrão lastSeen) e manda
+//a GauntletLighting redimensionar os render targets — ver gauntletWorld.ts.
+export const SET_GAUNTLET_SHADOW_MAP_SIZE = "SET_GAUNTLET_SHADOW_MAP_SIZE";
+//A tela de escolha de personagens é um modal exibido depois do log in bem
+//sucedido (e portanto depois de ter passado das barreiras do spring security
+//e estar num ambiente confiável)
+export const GAUNTLET_CHOOSING_CHARACTER = "GAUNTLET_CHOOSING_CHARACTER";
+//O player concluiu a escolha no modal (Dmitry/Nat) — fecha o modal e destrava
+//o resto do rito de conexão (GauntletNetworkBehaviour.update() lê
+//gauntlet.character pra saber que pode buscar o player-controller-settings
+//DESTE personagem e então abrir o signaling com o character no JoinRequest).
+export const GAUNTLET_CHARACTER_CHOSEN = "GAUNTLET_CHARACTER_CHOSEN";
 //Como o gradiente é obtido. "precalculated": uma textura 3D de gradientes
 //gerada uma vez (rápido no raymarch, custa VRAM e um pré-passo). "on-the-fly":
 //diferenças centrais amostradas no próprio shader a cada passo (zero memória
@@ -54,19 +73,17 @@ export type GradientMode = "precalculated" | "on-the-fly";
  * Os mundos da app, como union e não string solta — mesmo critério do
  * RenderPassBit: typo morre em compile time. Cresce junto com os mundos.
  */
-export type WorldName = 
-    "solarSystem" | 
+export type WorldName =
+    "solarSystem" |
     "textureStackVolumeRenderSynthetic" |
-    "textureStackVolumeRenderCT" | 
-    //"StarshipDemo" | 
-    "raycast" | 
+    "textureStackVolumeRenderCT" |
+    "StarshipDemo" |
+    "raycast" |
     "raycastESS" |
-    "gameVolume" | 
-    //"train" |
-    "textureStackVolumeRenderCT"; //| 
-    //"StarshipDemo" | 
-   // "SkinningDemo" | 
-    //"gauntlet";
+    "gameVolume" |
+    "train" |
+    "SkinningDemo" |
+    "gauntlet";
 
 export interface HelloClickedAction {
     type: typeof HELLO_CLICKED;
@@ -139,6 +156,29 @@ export interface SetRaycastEssDebugAction {
     payload: boolean;
 }
 
+export interface GauntletLoginSucceededAction {
+    type: typeof GAUNTLET_LOGIN_SUCCEEDED;
+    /** Quem logou — pra UI exibir e pro futuro HUD; a credencial é o cookie. */
+    payload: { username: string };
+}
+
+export interface SetGauntletShadowMapSizeAction {
+    type: typeof SET_GAUNTLET_SHADOW_MAP_SIZE;
+    payload: number;
+}
+
+export interface GauntletSetCharacterScreenAction {
+    type: typeof GAUNTLET_CHOOSING_CHARACTER;
+    payload: boolean;
+}
+
+export interface GauntletCharacterChosenAction {
+    type: typeof GAUNTLET_CHARACTER_CHOSEN;
+    /** "Dmitry" ou "Nat" — mesma string usada como nome do prefab (ver
+     *  gauntletWorld.ts) e mandada pro server em JoinRequest.character. */
+    payload: { character: string };
+}
+
 export function helloClicked(): HelloClickedAction {
     return { type: HELLO_CLICKED };
 }
@@ -195,6 +235,25 @@ export function setRaycastEssDebugView(enabled: boolean): SetRaycastEssDebugActi
     return { type: SET_RAYCAST_ESS_DEBUG, payload: enabled };
 }
 
+export function gauntletLoginSucceeded(username: string): GauntletLoginSucceededAction {
+    return { type: GAUNTLET_LOGIN_SUCCEEDED, payload: { username } };
+}
+
+export function setGauntletShadowMapSize(size: number): SetGauntletShadowMapSizeAction {
+    return { type: SET_GAUNTLET_SHADOW_MAP_SIZE, payload: size };
+}
+
+export function gauntletShowCharacterSelectionScreen():GauntletSetCharacterScreenAction {
+    return {type:GAUNTLET_CHOOSING_CHARACTER, payload: true};
+}
+
+export function gauntletHideCharacterSelectionScreen():GauntletSetCharacterScreenAction {
+    return {type:GAUNTLET_CHOOSING_CHARACTER, payload: false};
+}
+
+export function gauntletCharacterChosen(character: string): GauntletCharacterChosenAction {
+    return { type: GAUNTLET_CHARACTER_CHOSEN, payload: { character } };
+}
 //União de todas as actions da app — cresce conforme a UI cresce. TODO
 //reducer é tipado com ela: no redux, todo reducer recebe TODA action e
 //ignora (default) as que não conhece.
@@ -212,4 +271,8 @@ export type AppAction =
     | SetRaycastGradientModeAction
     | SetRaycastFramebufferScaleAction
     | SetRaycastEssAction
-    | SetRaycastEssDebugAction;
+    | SetRaycastEssDebugAction
+    | GauntletLoginSucceededAction
+    | SetGauntletShadowMapSizeAction
+    | GauntletSetCharacterScreenAction
+    | GauntletCharacterChosenAction;

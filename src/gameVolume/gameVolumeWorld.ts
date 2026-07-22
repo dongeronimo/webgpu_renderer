@@ -32,7 +32,7 @@ import { World } from "../world";
 import { Node } from "../node";
 import { Mesh } from "../mesh";
 import { Renderable, RenderPassBit } from "../renderable";
-import { Light } from "../Light";
+import { DirectionalLight } from "../Light";
 import { loadGltf } from "../gltfLoader";
 import { registerMaterial } from "../material";
 import { OrbitCameraBehaviour } from "../raycast/orbitCameraBehaviour";
@@ -93,9 +93,12 @@ export class GameVolumeWorld extends World {
         //Luz orbitando — agora só a DIREÇÃO do sol sai daqui (normalize(alvo -
         //posição)); a distância não importa mais (direcional não atenua). A
         //órbita fica: sombras da geometria E da fumaça girando ao vivo na demo.
+        //DirectionalLight (API nova de Light): a direção é derivada na coleta a
+        //partir do -Z da worldMatrix do nó (aqui a gente lê a posição do nó pra
+        //montar o Sun); nada de atenuação por distância.
         this.lightNode = new Node();
         this.lightNode.name = "Light0";
-        this.lightNode.light = new Light();
+        this.lightNode.light = new DirectionalLight();
         this.rootNode.addChild(this.lightNode);
         this.lightNode.addBehaviour(new OrbitLightBehaviour(vec3.create(0, 0, 0), 120, 150, 0.35));
 

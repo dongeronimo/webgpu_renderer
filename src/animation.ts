@@ -7,7 +7,7 @@
 //Modelo glTF: cada canal amostra UMA propriedade (translation/rotation/scale)
 //de um osso, via um sampler = (times[], values[], interpolação). Os valores
 //são vec3 pra T/S e quat pra R.
-import { quat, vec3 } from "wgpu-matrix";
+import { quat, vec3, type Quat, type Vec3 } from "wgpu-matrix";
 import type { Node } from "./node";
 
 /** Propriedade local do osso que um canal anima. */
@@ -44,19 +44,12 @@ export class AnimationClip {
 //applyChannel, que é síncrono — sem risco de reentrância.
 const scratchQuat = quat.identity();
 
-/**
- * Amostra `channel` em `time` (segundos) e escreve o resultado na
- * propriedade local correspondente de `node` (posição/rotação/escala).
- * `time` deve já vir dentro de [0, duração] (o loop é da AnimatorBehaviour).
- *
- * T/S entram no lugar em `node.position`/`node.scale` (Vec3 mutáveis); R passa
- * pelo setter de `node.rotation` (que normaliza). Rotação usa SLERP; T/S, LERP.
- */
-export function applyChannel(channel: AnimationChannel, time: number, node: Node): void {
-  const { times, values, path, interp } = channel;
+/** Acha o segmento [i0, i1] e o fator u ∈ [0,1] de `time` dentro de `times`,
+ *  respeitando `interp` (STEP segura a keyframe da esquerda). Extraído de
+ *  applyChannel pra ser compartilhado com sampleVec3/sampleQuat — a busca do
+ *  segmento não depende de T/R/S, só a interpolação final depende. */
+function findSegment(times: Float32Array, time: number, interp: AnimInterp): { i0: number; i1: number; u: number } {
   const n = times.length;
-
-  //---- acha o segmento [i0, i1] e o fator u ∈ [0,1] ----
   let i0: number;
   let i1: number;
   let u: number;
@@ -87,16 +80,42 @@ export function applyChannel(channel: AnimationChannel, time: number, node: Node
     i1 = i0;
     u = 0;
   }
+  return { i0, i1, u };
+}
 
-  if (path === "rotation") {
-    const a = values.subarray(i0 * 4, i0 * 4 + 4);
-    const b = values.subarray(i1 * 4, i1 * 4 + 4);
-    //slerp(a, b, 0) == a, então o caso u==0 cai naturalmente aqui.
-    node.rotation = quat.slerp(a, b, u, scratchQuat);
+/** Amostra um canal de translation/scale em `time`, escrevendo em `dst`
+ *  (LERP), sem tocar em nenhum Node. Usada tanto por applyChannel quanto pelo
+ *  blend de crossfade (AnimatorBehaviour), que precisa do valor cru de DOIS
+ *  clips antes de misturar. */
+export function sampleVec3(channel: AnimationChannel, time: number, dst: Vec3): Vec3 {
+  const { i0, i1, u } = findSegment(channel.times, time, channel.interp);
+  const a = channel.values.subarray(i0 * 3, i0 * 3 + 3);
+  const b = channel.values.subarray(i1 * 3, i1 * 3 + 3);
+  return vec3.lerp(a, b, u, dst);
+}
+
+/** Amostra um canal de rotation em `time`, escrevendo em `dst` (SLERP). Ver
+ *  sampleVec3. */
+export function sampleQuat(channel: AnimationChannel, time: number, dst: Quat): Quat {
+  const { i0, i1, u } = findSegment(channel.times, time, channel.interp);
+  const a = channel.values.subarray(i0 * 4, i0 * 4 + 4);
+  const b = channel.values.subarray(i1 * 4, i1 * 4 + 4);
+  //slerp(a, b, 0) == a, então o caso u==0 cai naturalmente aqui.
+  return quat.slerp(a, b, u, dst);
+}
+
+/**
+ * Amostra `channel` em `time` (segundos) e escreve o resultado na
+ * propriedade local correspondente de `node` (posição/rotação/escala).
+ * `time` deve já vir dentro de [0, duração] (o loop é da AnimatorBehaviour).
+ *
+ * T/S entram no lugar em `node.position`/`node.scale` (Vec3 mutáveis); R passa
+ * pelo setter de `node.rotation` (que normaliza).
+ */
+export function applyChannel(channel: AnimationChannel, time: number, node: Node): void {
+  if (channel.path === "rotation") {
+    node.rotation = sampleQuat(channel, time, scratchQuat);
   } else {
-    const a = values.subarray(i0 * 3, i0 * 3 + 3);
-    const b = values.subarray(i1 * 3, i1 * 3 + 3);
-    //escreve direto no vec3 mutável do nó (sem alocar nem passar por setter).
-    vec3.lerp(a, b, u, path === "translation" ? node.position : node.scale);
+    sampleVec3(channel, time, channel.path === "translation" ? node.position : node.scale);
   }
 }
