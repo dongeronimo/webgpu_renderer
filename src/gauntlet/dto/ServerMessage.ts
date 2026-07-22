@@ -6,6 +6,10 @@
 export interface EntityDto {
     id: number;
     kind: string;
+    //"Dmitry"/"Nat" — nome do prefab a instanciar (ver GauntletNetwork.onEntsAdded
+    //e gauntletWorld.ts), escolhido no modal pós-login e ecoado pelo server
+    //pra TODO client, não só o dono (é isso que resolve Bob ver o Dmitry da Alice).
+    character: string;
     owner: number;
     x: number;
     z: number;

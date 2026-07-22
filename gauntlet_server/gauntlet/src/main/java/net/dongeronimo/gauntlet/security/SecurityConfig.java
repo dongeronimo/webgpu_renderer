@@ -42,7 +42,7 @@ public class SecurityConfig {
                   //@RestController de verdade (Spring MVC), então o matcher por
                   //String funciona normal aqui (diferente do /h2-console, que é
                   //um Servlet cru).
-                  .requestMatchers("/api/player-controller-settings").hasRole("PLAYER")
+                  .requestMatchers("/api/player-controller-settings/*").hasRole("PLAYER")
                   .anyRequest().authenticated())
               //default cria endpoints GET /login e POST /login
               .formLogin(Customizer.withDefaults())

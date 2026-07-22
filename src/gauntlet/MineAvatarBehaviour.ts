@@ -75,10 +75,16 @@ export default class MineAvatarBehaviour extends Behaviour {
 
         //---- yaw: agora é ESTADO PERSISTENTE, girado por A/D a ritmo
         //constante — funciona parado (turn independe de move). Valores vêm
-        //de GauntletNetwork (buscados via GET /api/player-controller-settings
+        //de GauntletNetwork (buscados via GET /api/player-controller-settings/{character}
         //em connectSignaling(), ANTES de qualquer pawn nascer — ver lá).
+        //Parado (move===0, SEM intenção de andar) gira idleTurnMultiplier×
+        //mais rápido — mesma regra e MESMA decisão pela intenção crua (não
+        //pela velocidade residual) que GameLoop.stepMovement no server.
         if (turn !== 0) {
-            const newYawDeg = this.node.eulerAngles[1] + turn * this.network.angularVelocityDegPerSec * deltaTime;
+            const turnRateDegPerSec = move === 0
+                ? this.network.angularVelocityDegPerSec * this.network.idleTurnMultiplier
+                : this.network.angularVelocityDegPerSec;
+            const newYawDeg = this.node.eulerAngles[1] + turn * turnRateDegPerSec * deltaTime;
             this.node.eulerAngles = vec3.create(0, newYawDeg, 0);
         }
 

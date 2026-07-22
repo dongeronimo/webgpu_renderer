@@ -2,7 +2,7 @@
 //switch e spread — sem toolkit, sem immer.
 import { combineReducers } from "redux";
 import type { CtfPoint } from "../ctf";
-import { CTF_SET_POINTS, GAUNTLET_LOGIN_SUCCEEDED, HELLO_CLICKED, ORBIT_CAMERA, SET_ALPHA_SCALE, SET_CTF_HU_RANGE, SET_DEBUG_VIEW_ACTIVE, SET_GAUNTLET_SHADOW_MAP_SIZE, SET_RAYCAST_ESS, SET_RAYCAST_ESS_DEBUG, SET_RAYCAST_FRAMEBUFFER_SCALE, SET_RAYCAST_GRADIENT_MODE, SET_RAYCAST_GRADIENT_SHADING, SWITCH_WORLD, TEXTURE_BASED_CT_SET_NUM_SLICES, ZOOM_CAMERA, type AppAction, type GradientMode, type WorldName } from "./actions";
+import { CTF_SET_POINTS, GAUNTLET_CHARACTER_CHOSEN, GAUNTLET_CHOOSING_CHARACTER, GAUNTLET_LOGIN_SUCCEEDED, HELLO_CLICKED, ORBIT_CAMERA, SET_ALPHA_SCALE, SET_CTF_HU_RANGE, SET_DEBUG_VIEW_ACTIVE, SET_GAUNTLET_SHADOW_MAP_SIZE, SET_RAYCAST_ESS, SET_RAYCAST_ESS_DEBUG, SET_RAYCAST_FRAMEBUFFER_SCALE, SET_RAYCAST_GRADIENT_MODE, SET_RAYCAST_GRADIENT_SHADING, SWITCH_WORLD, TEXTURE_BASED_CT_SET_NUM_SLICES, ZOOM_CAMERA, type AppAction, type GradientMode, type WorldName } from "./actions";
 
 export interface HelloState {
     /** Quantas vezes o botão de hello foi clicado. */
@@ -85,6 +85,14 @@ export interface GauntletState {
     username: string;
     //O gatilho que a behaviour espera pra conectar.
     loggedIn: boolean;
+    //flag da tela de escolha de personagem.
+    choosingCharacter: boolean;
+    //"Dmitry"/"Nat" depois de escolhido no modal (null até lá) — o gatilho
+    //que GauntletNetworkBehaviour.update() espera pra buscar o
+    //player-controller-settings DESTE personagem e então conectar (ver
+    //connectSignaling em GauntletNetwork.ts). Mesma string manda no
+    //JoinRequest e nomeia o prefab (gauntletWorld.ts).
+    character: string | null;
     //Resolução (px, quadrado) dos shadow maps de spot/directional — o
     //GauntletWorld lê no update() e manda a GauntletLighting redimensionar
     //os render targets (ver gauntletLighting.ts/gauntletWorld.ts). Default
@@ -99,6 +107,8 @@ const helloInitial: HelloState = {
 const gauntletInitial: GauntletState = {
     username: "",
     loggedIn: false,
+    choosingCharacter : false,
+    character: null,
     shadowMapSize: 512,
 };
 
@@ -186,6 +196,12 @@ function gauntletReducer(state: GauntletState = gauntletInitial, action: AppActi
             return { ...state, username: action.payload.username, loggedIn: true };
         case SET_GAUNTLET_SHADOW_MAP_SIZE:
             return { ...state, shadowMapSize: action.payload };
+        case GAUNTLET_CHOOSING_CHARACTER:
+            return { ...state, choosingCharacter: action.payload };
+        case GAUNTLET_CHARACTER_CHOSEN:
+            //escolha concluída: fecha o modal junto, senão sobra um frame
+            //onde character já não é null mas o modal ainda está de pé.
+            return { ...state, character: action.payload.character, choosingCharacter: false };
         default:
             return state;
     }

@@ -55,7 +55,15 @@ export const GAUNTLET_LOGIN_SUCCEEDED = "GAUNTLET_LOGIN_SUCCEEDED";
 //(campo de texto); o GauntletWorld lê no update() (padrão lastSeen) e manda
 //a GauntletLighting redimensionar os render targets — ver gauntletWorld.ts.
 export const SET_GAUNTLET_SHADOW_MAP_SIZE = "SET_GAUNTLET_SHADOW_MAP_SIZE";
-
+//A tela de escolha de personagens é um modal exibido depois do log in bem
+//sucedido (e portanto depois de ter passado das barreiras do spring security
+//e estar num ambiente confiável)
+export const GAUNTLET_CHOOSING_CHARACTER = "GAUNTLET_CHOOSING_CHARACTER";
+//O player concluiu a escolha no modal (Dmitry/Nat) — fecha o modal e destrava
+//o resto do rito de conexão (GauntletNetworkBehaviour.update() lê
+//gauntlet.character pra saber que pode buscar o player-controller-settings
+//DESTE personagem e então abrir o signaling com o character no JoinRequest).
+export const GAUNTLET_CHARACTER_CHOSEN = "GAUNTLET_CHARACTER_CHOSEN";
 //Como o gradiente é obtido. "precalculated": uma textura 3D de gradientes
 //gerada uma vez (rápido no raymarch, custa VRAM e um pré-passo). "on-the-fly":
 //diferenças centrais amostradas no próprio shader a cada passo (zero memória
@@ -152,6 +160,18 @@ export interface SetGauntletShadowMapSizeAction {
     payload: number;
 }
 
+export interface GauntletSetCharacterScreenAction {
+    type: typeof GAUNTLET_CHOOSING_CHARACTER;
+    payload: boolean;
+}
+
+export interface GauntletCharacterChosenAction {
+    type: typeof GAUNTLET_CHARACTER_CHOSEN;
+    /** "Dmitry" ou "Nat" — mesma string usada como nome do prefab (ver
+     *  gauntletWorld.ts) e mandada pro server em JoinRequest.character. */
+    payload: { character: string };
+}
+
 export function helloClicked(): HelloClickedAction {
     return { type: HELLO_CLICKED };
 }
@@ -216,6 +236,17 @@ export function setGauntletShadowMapSize(size: number): SetGauntletShadowMapSize
     return { type: SET_GAUNTLET_SHADOW_MAP_SIZE, payload: size };
 }
 
+export function gauntletShowCharacterSelectionScreen():GauntletSetCharacterScreenAction {
+    return {type:GAUNTLET_CHOOSING_CHARACTER, payload: true};
+}
+
+export function gauntletHideCharacterSelectionScreen():GauntletSetCharacterScreenAction {
+    return {type:GAUNTLET_CHOOSING_CHARACTER, payload: false};
+}
+
+export function gauntletCharacterChosen(character: string): GauntletCharacterChosenAction {
+    return { type: GAUNTLET_CHARACTER_CHOSEN, payload: { character } };
+}
 //União de todas as actions da app — cresce conforme a UI cresce. TODO
 //reducer é tipado com ela: no redux, todo reducer recebe TODA action e
 //ignora (default) as que não conhece.
@@ -235,4 +266,6 @@ export type AppAction =
     | SetRaycastEssAction
     | SetRaycastEssDebugAction
     | GauntletLoginSucceededAction
-    | SetGauntletShadowMapSizeAction;
+    | SetGauntletShadowMapSizeAction
+    | GauntletSetCharacterScreenAction
+    | GauntletCharacterChosenAction;

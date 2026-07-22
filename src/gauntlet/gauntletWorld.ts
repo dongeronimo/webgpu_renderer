@@ -1,3 +1,27 @@
+/**
+ * HOW-TO de como setei as skins do player:
+ * 1) criei o material delas - a gente não está usando o material do blender ainda mas um uma custom property Material com a tag do material. Então eu
+ *    crio o material:
+ *    const dmitrySkinTexture = new TexturedSkinnedPhong (
+ *      this.device, {
+ *          diffuseColor:[1,1,1,1],
+ *          diffuseTexture: await loadTexture(this.device, "/textures/soviet+officer+male_basecolor.jpg"),
+ *          shininess:16
+ *      });
+ *    ATENÇÃO: TexturedSkinnedPhong, não TexturedOpaquePhong — personagem é
+ *    mesh SKINNED (desenhada pelo GauntletSkinnedRenderPass), e
+ *    TexturedOpaquePhong espera o grupo 1 no formato de mesh ESTÁTICA
+ *    (ObjectData{model,normalMatrix}), não SkinObject{pose[],boneModel[]}.
+ *    Usar o material errado não dá erro nenhum — só nunca anima (T-pose
+ *    fixo) e "desliza" com a pose crua do osso 0 por cima do buffer errado.
+ *    Se for um personagem sem esqueleto/estático, aí sim TexturedOpaquePhong.
+ *    obs.: é custom prop do NODE, não do material. É a custom prop que aparece no fundo da aba quando seleciona o retângulozinho laranja
+ * 2) Registro o material no registro de material:
+ *    registerMaterial("DmitryMaterial", dmitrySkinTexture);
+ *    A chave tem que bater exatamente com a string no custom prop do blender, é via ===.
+ *
+ */
+
 //Mundo do GAUNTLET — client da vertical multiplayer (server Spring Boot em
 //gauntlet_server/; spec em src/instructions/multiplayer.md). Estágio 0: só o
 //cubo unitário na tela, câmera fixa e luz no alto — o esqueleto onde a parte
@@ -11,25 +35,24 @@
 //gauntletLighting.ts pro porquê da divergência.
 import { vec3 } from "wgpu-matrix";
 import { Camera } from "../camera";
-import { FinalRenderPass } from "../finalPass";
+import { TonemapPass } from "../tonemapPass";
 import { World } from "../world";
 import { Node } from "../node";
 import { Mesh } from "../mesh";
 import {  RenderPassBit } from "../renderable";
-import { PointLight } from "../Light";
+import { DirectionalLight } from "../Light";
 import { loadGltf } from "../gltfLoader";
-import { registerMaterial } from "../material";
+import { getMaterial, registerMaterial } from "../material";
 import { GauntletLighting } from "./gauntletLighting";
 import { GauntletMainRenderPass } from "./gauntletMainRenderPass";
 import { GauntletShadowPass } from "./gauntletShadowPass";
 import { PhongColorMaterial } from "./materials/PhongColorMaterial";
 import GauntletNetworkBehaviour from "./GauntletNetwork";
 import { TexturedOpaquePhong } from "./materials/TexturedOpaquePhong";
+import { TexturedSkinnedPhong } from "./materials/TexturedSkinnedPhong";
 import { loadTexture } from "../textureLoader";
 import { Prefab } from "../prefab";
 import PrefabFabricator from "../PrefabFabricator";
-import { SkinnedPhongMaterial } from "./materials/SkinnedPhongMaterial";
-import { Material } from "../material";
 import { GauntletSkinnedRenderPass } from "./gauntletSkinnedRenderPass";
 import { AnimatorBehaviour } from "../skinning/AnimatorBehaviour";
 import type { AnimationClip } from "../animation";
@@ -44,9 +67,14 @@ import { store } from "../redux/store";
 const DUNGEON_SHADOW_BOUNDS_MIN = vec3.create(-35, -1, -35);
 const DUNGEON_SHADOW_BOUNDS_MAX = vec3.create(35, 20, 35);
 
+//Alvo do mainPass/skinnedPass em HDR de verdade: luz pode passar de 1.0 sem
+//clipar aqui — o clip vira uma curva suave (Reinhard) só no TonemapPass,
+//na hora de compor no backbuffer (esse sim 8-bit, formato do canvas).
+const HDR_COLOR_FORMAT: GPUTextureFormat = "rgba16float";
+
 export class GauntletWorld extends World implements PrefabFabricator {
     private mainPass!: GauntletMainRenderPass;
-    private finalPass!: FinalRenderPass;
+    private finalPass!: TonemapPass;
     private canvas!: HTMLCanvasElement;
     public meshes: Mesh[] = [];
     public prefabs: Map<string, Prefab> = new Map();
@@ -62,7 +90,11 @@ export class GauntletWorld extends World implements PrefabFabricator {
         this.canvas = canvas;
         this.lighting = new GauntletLighting(this.device);
         this.shadowPass = new GauntletShadowPass(this.device);
-        this.skinnedPass = new GauntletSkinnedRenderPass(this.device, this.lighting, canvasFormat, "clear");
+        //HDR_COLOR_FORMAT nos dois: skinnedPass desenha via renderOnto no
+        //MESMO color+depth do mainPass (ver render() abaixo), então o
+        //pipeline dele precisa ser criado com o formato real daquele alvo,
+        //não com o do canvas.
+        this.skinnedPass = new GauntletSkinnedRenderPass(this.device, this.lighting, HDR_COLOR_FORMAT, "clear");
         //"clear": aqui é o PRIMEIRO pass a tocar o alvo — desenha a dungeon,
         //e o skinnedPass entra DEPOIS por cima via renderOnto (color+depth
         //"load"), senão o chão (opaco, cobre a tela inteira na câmera
@@ -70,8 +102,10 @@ export class GauntletWorld extends World implements PrefabFabricator {
         //default "discard"): sem isso o depth do mainPass some antes do
         //skinnedPass poder testar contra ele — o teste falha pra tudo e o
         //avatar não desenha nenhum pixel, mesmo desenhado com sucesso.
-        this.mainPass = new GauntletMainRenderPass(this.device, this.lighting, canvasFormat, "clear", "store");
-        this.finalPass = new FinalRenderPass(this.device, canvas, canvasFormat);
+        this.mainPass = new GauntletMainRenderPass(this.device, this.lighting, HDR_COLOR_FORMAT, "clear", "store");
+        //TonemapPass é quem continua no formato do canvas — é ele que
+        //apresenta, e a swapchain só aceita o preferredCanvasFormat.
+        this.finalPass = new TonemapPass(this.device, canvas, canvasFormat);
     }
 
     /**
@@ -97,17 +131,47 @@ export class GauntletWorld extends World implements PrefabFabricator {
                 shininess:32
             }
         )
+        //TexturedSkinnedPhong, não TexturedOpaquePhong: Dmitry/Nat são meshes
+        //SKINNED (desenhados pelo GauntletSkinnedRenderPass, grupo 1 =
+        //SkinObject) — TexturedOpaquePhong espera ObjectData{model,normalMatrix}
+        //no grupo 1 (é o que GauntletMainRenderPass fornece) e nunca lê
+        //joints/weights, então nunca desformava a mesh (T-pose sempre) e
+        //"model" na prática lia pose[0] do buffer errado (daí o corpo inteiro
+        //balançando junto com aquele osso). Ver TexturedSkinnedPhong.ts.
+        const dmitrySkinTexture = new TexturedSkinnedPhong (
+            this.device, {
+                diffuseColor:[1,1,1,1],
+                diffuseTexture: await loadTexture(this.device, "/textures/soviet+officer+male_basecolor.jpg"),
+                shininess: 16
+            }
+        );
+        const natSkinTexture = new TexturedSkinnedPhong (
+            this.device, {
+                diffuseColor:[1,1,1,1],
+                diffuseTexture: await loadTexture(this.device, "/textures/soviet+female+officer_basecolor.jpg"),
+                shininess: 16
+            }
+        );
+        const abiSkinTexture = new TexturedSkinnedPhong (
+            this.device, {
+                diffuseColor:[1,1,1,1],
+                diffuseTexture: await loadTexture(this.device, "/textures/abigail_basecolor.jpg"),
+                shininess: 32
+            }
+        );
+        const ramirezSkinTexture = new TexturedSkinnedPhong (
+            this.device, {
+                diffuseColor:[1,1,1,1],
+                diffuseTexture: await loadTexture(this.device, "/textures/ramirez-military+character+3d+model_basecolor.jpg"),
+                shininess: 16
+            }
+        )
         registerMaterial("clay", clay);
         registerMaterial("blackRock", blackRock);
-        //teste: específico do xbot, no futuor vai ter que ser trocado
-        const player1BodyMaterial = new SkinnedPhongMaterial(this.device, [0.72, 0.73, 0.75, 1], [0.06, 0.06, 0.07], 48);
-        const player1JointsMaterial = new SkinnedPhongMaterial(this.device, [0.90, 0.45, 0.10, 1], [0.08, 0.04, 0.01], 24);
-        const player2BodyMaterial = new SkinnedPhongMaterial(this.device, [0.20, 0.20, 0.50, 1], [0.06, 0.06, 0.07], 48);
-        const player2JointsMaterial = new SkinnedPhongMaterial(this.device, [0.10, 0.45, 0.90, 1], [0.08, 0.04, 0.01], 24);
-        registerMaterial("p1Body", player1BodyMaterial);
-        registerMaterial("p1Joints", player1JointsMaterial);
-        registerMaterial("p2Body", player2BodyMaterial);
-        registerMaterial("p2Joints", player2JointsMaterial);
+        registerMaterial("DmitryMaterial", dmitrySkinTexture);
+        registerMaterial("natMaterial", natSkinTexture);
+        registerMaterial("abigailSkin", abiSkinTexture);
+        registerMaterial("ramirezSkin", ramirezSkinTexture);
         
         //Câmera fixa quase top-down enquadrando a dungeon INTEIRA: o mapa é
         //32×32 células × tile 2 = 64×64 unidades, centrado na origem pelo
@@ -132,19 +196,36 @@ export class GauntletWorld extends World implements PrefabFabricator {
         //antes do 1º render(), não depende de nenhuma luz existir ainda.
         this.lighting.setShadowSceneBounds(DUNGEON_SHADOW_BOUNDS_MIN, DUNGEON_SHADOW_BOUNDS_MAX);
 
-        //Luz no alto e LONGE (≥150u) — mesma posição de antes, mas agora
-        //`intensity` é propriedade da PointLight em vez de light0Power fixo
-        //no shader. Reduzida (era 250) — 250 era calibrado pra atenuação
-        //linear sem nenhuma outra luz na cena; com a spot fraca do player
-        //(ver GauntletNetwork.onEntsAdded) 250 fica exagerado perto do chão.
-        //Ajuste visual pendente — comece por aqui e suba/desça olhando a cena.
+        //Luz GLOBAL da cena: DirectionalLight, não PointLight. Dois motivos:
+        //1) point/spot atenuam por DISTÂNCIA (atten = intensity/dist, linear
+        //   — ver PhongColorMaterial), então uma luz "de teto" a 150-190u de
+        //   distância da dungeon inteira precisa de intensity gigante (chegou
+        //   a 250) só pra não ficar escura, e ainda assim varia muito entre o
+        //   canto mais perto e o mais longe do mapa. Directional não atena
+        //   com distância nenhuma (fonte infinitamente distante) — intensity
+        //   pequena já ilumina a dungeon TODA por igual.
+        //2) point light ainda NÃO tem shadow map neste engine (só spot e
+        //   directional — ver gauntletLighting.ts), por isso "parecia não
+        //   gerar sombra": literalmente não gerava, é limitação conhecida,
+        //   não bug. Directional já tem toda a infra pronta e ESPERANDO (ver
+        //   setShadowSceneBounds acima, DUNGEON_SHADOW_BOUNDS_MIN/MAX) — só
+        //   faltava um directional de verdade na cena pra usá-la.
+        //lookAt em vez de (0,1,0) reto pra baixo: ângulo dá sombras longas e
+        //legíveis no chão em vez de sombras curtas quase só embaixo do pé.
+        //Posição não importa pra iluminação/sombra (direction vem só da
+        //rotação, computeDirectionalShadowViewProj monta a câmera sintética a
+        //partir da cena, não da posição do nó) — só precisa ser um ponto que
+        //dê a direção certa pro lookAt, então reaproveita as mesmas coordenadas
+        //de antes.
         const light = new Node();
         light.name = "Light0";
-        const ceilingLight = new PointLight();
-        ceilingLight.intensity = 30;
-        light.light = ceilingLight;
         vec3.set(60, 150, 60, light.position);
         this.rootNode.addChild(light);
+        light.lookAt(vec3.create(0, 0, 0));
+        const sun = new DirectionalLight();
+        sun.color = [1, 0.97, 0.92];
+        sun.intensity = 1.1;
+        light.light = sun;
 
         //Padrão dos outros mundos: behaviours enxergam o World.
         this.getAllNodes()
@@ -156,16 +237,22 @@ export class GauntletWorld extends World implements PrefabFabricator {
         //e mapSync chega UMA vez (perdeu a corrida = mundo vazio pra sempre).
         await this.loadModularDungeon();
 
-        //Clips de idle/walk/walkBackward — mesmo esqueleto do xbot (mixamorig:*),
+        //Clips de idle/walk/walkBackward — mesmo esqueleto do rig mixamorig:*,
         //casam por nome sem retargeting (ver animation.ts). UM carregamento só,
-        //compartilhado entre os templates "alice" e "bob" (AnimationClip é
+        //compartilhado entre os templates "Dmitry" e "Nat" (AnimationClip é
         //asset sem ref a Node — ver skinning-system).
         const idleClip = await this.loadAnimClip("/anims/rifle_idle.glb");
         const walkClip = await this.loadAnimClip("/anims/rifle_walk_forward.glb");
         const walkBackwardClip = await this.loadAnimClip("/anims/rifle_walk_backward.glb");
-
-        await this.loadP1Character(player1JointsMaterial, player1BodyMaterial, idleClip, walkClip, walkBackwardClip);
-        await this.loadP2Character(player2JointsMaterial, player2BodyMaterial, idleClip, walkClip, walkBackwardClip);
+        //carrega os bonecos de russos — os dois personagens jogáveis (ver
+        //modal de escolha pós-login). O NOME do prefab ("Dmitry"/"Nat") é a
+        //MESMA string que viaja em JoinRequest.character/EntityDto.character
+        //(GauntletNetwork.onEntsAdded fabrica direto por esse nome).
+        await this.loadHeroes("/models/Dmitry.glb", "Dmitry",  idleClip, walkClip, walkBackwardClip);
+        await this.loadHeroes("/models/Nat.glb", "Nat",  idleClip, walkClip, walkBackwardClip);
+        await this.loadHeroes("/models/abi.glb", "Abigail",  idleClip, walkClip, walkBackwardClip);
+        await this.loadHeroes("/models/ramirez.glb", "Ramirez",  idleClip, walkClip, walkBackwardClip);
+        
         //adiciona capacidades de rede do world
         this.root.addBehaviour(new GauntletNetworkBehaviour(2,2));
     }
@@ -226,49 +313,25 @@ export class GauntletWorld extends World implements PrefabFabricator {
         animator.initialState = "idle";
         armature.addBehaviour(animator);
     }
-
-    // To assumindo que é o xbot do mixamo. Quando mudar isso aqui vai ter que mudar tudo
-    private async loadP1Character(jointMat:Material, body:Material, idleClip: AnimationClip, walkClip: AnimationClip, walkBackwardClip: AnimationClip) {
-        const {roots, nodes, meshes} = await loadGltf(this.device, "/models/xbot.glb");
-        //assets do World: sem isto o destroy() não libera os buffers do xbot
-        this.meshes.push(...meshes);
-        for(const node of nodes) {
-            if(node.renderable && node.skin) {
-                node.renderable.passMask = RenderPassBit.Skinned;
-                node.renderable.material = node.name === "Beta_Joints"? jointMat : body;
-            }
-        }
-        //To assumindo que tem um root chamado Armature
-        const armature = roots.find((n) => n.name === "Armature");
-        if(!armature){
-            throw new Error("nó armature não encontrado em xbot.glb");
-        }
-        //destaca pra virar template
+    //TODO refactor: os clips deveriam ficar numa struct ao invés de params soltos
+    private async loadHeroes(file:string, prefabName:string, idleClip: AnimationClip, walkClip: AnimationClip, walkBackwardClip: AnimationClip){
+        const {roots, nodes, meshes} = await loadGltf(this.device, file);
+        this.meshes.push(...meshes); //se não guardar no World vai vazar quando trocar de world.
+        //atribui material ao dmitry. 
+        nodes.filter(n=>n.renderable && n.skin).forEach(n=>{
+            n.renderable!.passMask = RenderPassBit.Skinned;
+            const matName = n.extras.Material as string;
+            console.log(`${file} mat name = ${matName}`);
+            n.renderable!.material = getMaterial(matName);
+        });
+        //To assumindo que tem um root chamado Armature. todos os bonecos que vêm do Blender tem
+        const armature = roots.find(n=>n.name==="Armature");
+        if(!armature) throw new Error(`nó armature não encontrado no ${file}`);
+        //detach do mundo pra virar template (prefab)
         armature.setParent(null);
         this.attachAnimator(armature, idleClip, walkClip, walkBackwardClip);
-        const prefab = Prefab.fromTemplate(armature, "alice");
-        this.prefabs.set("alice", prefab);
-    }
-    // To assumindo que é o xbot do mixamo. Qaundo mudar isso aqui vai ter que mudar tudo
-    private async loadP2Character(jointMat:Material, body:Material, idleClip: AnimationClip, walkClip: AnimationClip, walkBackwardClip: AnimationClip) {
-        const {roots, nodes, meshes} = await loadGltf(this.device, "/models/xbot.glb");
-        this.meshes.push(...meshes);
-        for(const node of nodes) {
-            if(node.renderable && node.skin) {
-                node.renderable.passMask = RenderPassBit.Skinned;
-                node.renderable.material = node.name === "Beta_Joints"? jointMat : body;
-            }
-        }
-        //To assumindo que tem um root chamado Armature
-        const armature = roots.find((n) => n.name === "Armature");
-        if(!armature){
-            throw new Error("nó armature não encontrado em xbot.glb");
-        }
-        //destaca pra virar template
-        armature.setParent(null);
-        this.attachAnimator(armature, idleClip, walkClip, walkBackwardClip);
-        const prefab = Prefab.fromTemplate(armature, "bob");
-        this.prefabs.set("bob", prefab);
+        const prefab = Prefab.fromTemplate(armature, prefabName);
+        this.prefabs.set(prefabName, prefab);
     }
 
     private createPrefab(n:Node, s:string){

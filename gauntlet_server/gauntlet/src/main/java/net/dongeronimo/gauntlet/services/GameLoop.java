@@ -5,6 +5,7 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
+import java.util.stream.Collectors;
 
 import org.springframework.stereotype.Component;
 import org.springframework.web.socket.TextMessage;
@@ -39,35 +40,18 @@ public class GameLoop {
     public static final int TICK_RATE = 20;
     public static final long TICK_MILLIS = 1000 / TICK_RATE;
     private static final double DT_SECONDS = TICK_MILLIS / 1000.0;
-    //Os cinco abaixo vêm de PlayerControllerSettings (tabela
-    //player_controller_settings), lida UMA VEZ no boot — não são mais
-    //`static final`. Editar a linha no /h2-console e reiniciar o server pra
-    //valer (sem hot-reload/REST por ora: ver PlayerControllerSettingsPersistence).
-    //cells/segundo (1 cell = 1 unidade) — velocidade de cruzeiro andando pra
-    //FRENTE; a aceleração (accel) é quem decide quão rápido se chega lá.
-    private final double moveSpeedForward;
-    //cells/segundo — velocidade de cruzeiro andando pra TRÁS, separada da de
-    //frente de propósito (mais lenta) — ver stepMovement, escolhida pelo
-    //sinal de move.
-    private final double moveSpeedBackward;
-    //cells/segundo² — o quanto a velocidade CORRENTE anda por tick rumo à
-    //intenção, em vez de saltar direto pra ela. É isso que dá ângulos
-    //intermediários numa virada (o vetor desliza entre as 8 direções em vez
-    //de trocar instantâneo) e uma parada suave em vez de travar seco.
-    //moveSpeedForward(ou Backward)/accel = ~tempo (s) pra sair do zero até a velocidade máxima.
-    private final double accel;
-    //radianos/segundo — ritmo em que A/D giram o pawn (controle tipo tank:
-    //turn é independente de move, funciona parado) — espelhar em
-    //MineAvatarBehaviour.ANGULAR_VELOCITY_DEG_PER_SEC (a tabela guarda graus;
-    //a conversão pra radianos acontece no construtor, uma vez).
-    private final double angularVelocityRadPerSec;
-    //"raio" do corpo do player pra colisão AABB×grid, em cells.
-    private final double playerRadius;
+    //Os parâmetros de movimento vêm de PlayerControllerSettings (tabela
+    //player_controller_settings) — UMA linha por personagem agora (Dmitry
+    //mais lento/robusto, Nat mais rápida/ágil — ver
+    //PlayerControllerSettingsPersistence.defaults()), lidas UMA VEZ no boot e
+    //indexadas por character aqui. Editar as linhas no /h2-console e
+    //reiniciar o server pra valer (sem hot-reload/REST por ora).
+    private final Map<String, Movement> movementByCharacter;
     //cells/segundo — abaixo disso conta como "idle" mesmo com resíduo de
     //velocidade (ex.: freando até parar). Só decide idle/walk; não é o
     //mesmo epsilon do "praticamente zero" usado pra pular a resolução de
-    //colisão logo abaixo (esse é bem mais apertado, 1e-6).
-    private final double moveStateEpsilon;
+    //colisão logo abaixo (esse é bem mais apertado, 1e-6). Fica por
+    //personagem também (junto com Movement) — ver toMovement.
     private static final double[] ZERO_INTENT = {0.0, 0.0};
     private static final double[] ZERO_VELOCITY = {0.0, 0.0};
 
@@ -78,13 +62,35 @@ public class GameLoop {
             PlayerControllerSettingsPersistence settingsPersistence) {
         this.objectMapper = objectMapper;
         this.executor = gameLoopExecutor;
-        PlayerControllerSettings settings = settingsPersistence.get();
-        this.moveSpeedForward = settings.getMoveSpeedForward();
-        this.moveSpeedBackward = settings.getMoveSpeedBackward();
-        this.accel = settings.getAccel();
-        this.angularVelocityRadPerSec = Math.toRadians(settings.getAngularVelocityDegPerSec());
-        this.playerRadius = settings.getPlayerRadius();
-        this.moveStateEpsilon = settings.getMoveStateEpsilon();
+        this.movementByCharacter = settingsPersistence.getAll().values().stream()
+            .collect(Collectors.toUnmodifiableMap(PlayerControllerSettings::getCharacter, GameLoop::toMovement));
+    }
+
+    /** Parâmetros de movimento JÁ CONVERTIDOS (giro em radianos) de UM
+     *  personagem — copiados de PlayerControllerSettings uma vez no boot, não
+     *  lidos de novo tick a tick (a linha do banco continua em graus, mais
+     *  fácil de editar a olho no /h2-console; ver
+     *  MineAvatarBehaviour.ANGULAR_VELOCITY_DEG_PER_SEC pro espelho client). */
+    private record Movement(double speedForward, double speedBackward, double accel,
+            double angularVelocityRadPerSec, double stateEpsilon, double radius, double idleTurnMultiplier) {}
+
+    private static Movement toMovement(PlayerControllerSettings s) {
+        return new Movement(s.getMoveSpeedForward(), s.getMoveSpeedBackward(), s.getAccel(),
+            Math.toRadians(s.getAngularVelocityDegPerSec()), s.getMoveStateEpsilon(), s.getPlayerRadius(),
+            s.getIdleTurnMultiplier());
+    }
+
+    /** @throws IllegalStateException se `character` não tiver Movement — só
+     *  pode acontecer se um WorldEntity nascer com um character que não bate
+     *  com nenhuma linha da tabela (SignalingWS já valida antes do join, ver
+     *  PlayerControllerSettingsPersistence.isKnownCharacter). */
+    private Movement movementOf(WorldEntity e) {
+        Movement m = movementByCharacter.get(e.getCharacter());
+        if (m == null) {
+            throw new IllegalStateException("GameLoop: entidade " + e.getId()
+                + " com character desconhecido: " + e.getCharacter());
+        }
+        return m;
     }
 
     /** Chamado pelo InstanceService quando a instância nasce (sob o lock dele). */
@@ -167,6 +173,7 @@ public class GameLoop {
         for (WorldEntity e : instance.getWorld().values()) {
             if (!"player".equals(e.getKind()))
                 continue;
+            Movement movement = movementOf(e);
             double[] intent = instance.getIntents().getOrDefault(e.getId(), ZERO_INTENT);
             double turn = intent[0];
             double move = intent[1];
@@ -177,8 +184,16 @@ public class GameLoop {
             //da convenção "dz negativo = norte" (ver MineAvatarBehaviour.ts)
             //— se A/D girarem pro lado errado na tela, inverte o sinal AQUI
             //e no client junto (mesmo cuidado do W ali).
+            //Parado (move==0, SEM intenção de andar) gira mais rápido que
+            //andando — mais fácil mudar de direção parado do que correndo.
+            //Decide pela INTENÇÃO crua (não pela velocidade residual/e.state),
+            //assim client e server concordam no mesmo tick sem depender de
+            //aceleração/frenagem já ter zerado a velocidade.
             if (turn != 0.0) {
-                e.setYaw(normalizeAngle(e.getYaw() + turn * angularVelocityRadPerSec * DT_SECONDS));
+                double turnRate = move == 0.0
+                    ? movement.angularVelocityRadPerSec() * movement.idleTurnMultiplier()
+                    : movement.angularVelocityRadPerSec();
+                e.setYaw(normalizeAngle(e.getYaw() + turn * turnRate * DT_SECONDS));
             }
 
             //Vetor forward a partir do yaw CORRENTE — mesma convenção do
@@ -190,12 +205,12 @@ public class GameLoop {
             //move>=0 (W ou parado) usa a velocidade de frente, move<0 (S) usa
             //a de trás (mais lenta) — o sinal de move já entra na conta
             //abaixo, então só a MAGNITUDE muda aqui.
-            double moveSpeed = move >= 0.0 ? moveSpeedForward : moveSpeedBackward;
+            double moveSpeed = move >= 0.0 ? movement.speedForward() : movement.speedBackward();
             double targetVx = forwardX * move * moveSpeed;
             double targetVz = forwardZ * move * moveSpeed;
 
             double[] vel = instance.getVelocities().computeIfAbsent(e.getId(), id -> new double[] { 0.0, 0.0 });
-            double maxDelta = accel * DT_SECONDS;
+            double maxDelta = movement.accel() * DT_SECONDS;
             vel[0] = moveToward(vel[0], targetVx, maxDelta);
             vel[1] = moveToward(vel[1], targetVz, maxDelta);
 
@@ -208,9 +223,9 @@ public class GameLoop {
             //dano), este trecho não pode continuar pisando em cima dele sem
             //checar antes.
             double forwardSpeed = vel[0] * forwardX + vel[1] * forwardZ;
-            if (forwardSpeed > moveStateEpsilon)
+            if (forwardSpeed > movement.stateEpsilon())
                 e.setState("walk");
-            else if (forwardSpeed < -moveStateEpsilon)
+            else if (forwardSpeed < -movement.stateEpsilon())
                 e.setState("walkBackward");
             else
                 e.setState("idle");
@@ -223,11 +238,11 @@ public class GameLoop {
             double newZ = e.getZ() + vel[1] * DT_SECONDS;
             //bateu na parede nesse eixo: zera a velocidade DO EIXO, senão ela
             //fica "empurrando" a parede e o próximo tick não acelera de novo.
-            if (isFree(map, newX, e.getZ()))
+            if (isFree(map, newX, e.getZ(), movement.radius()))
                 e.setX(newX);
             else
                 vel[0] = 0.0;
-            if (isFree(map, e.getX(), newZ))
+            if (isFree(map, e.getX(), newZ, movement.radius()))
                 e.setZ(newZ);
             else
                 vel[1] = 0.0;
@@ -255,12 +270,14 @@ public class GameLoop {
         return a;
     }
 
-    /** 4 cantos do corpo (não só o centro) — não deixa cortar quina de parede. */
-    private boolean isFree(GameMap map, double x, double z) {
-        return map.isWalkable(cellOf(x - playerRadius), cellOf(z - playerRadius))
-            && map.isWalkable(cellOf(x + playerRadius), cellOf(z - playerRadius))
-            && map.isWalkable(cellOf(x - playerRadius), cellOf(z + playerRadius))
-            && map.isWalkable(cellOf(x + playerRadius), cellOf(z + playerRadius));
+    /** 4 cantos do corpo (não só o centro) — não deixa cortar quina de parede.
+     *  `radius` é do PERSONAGEM da entidade (Movement.radius), não mais uma
+     *  constante global — Dmitry/Nat podem ter raios diferentes. */
+    private boolean isFree(GameMap map, double x, double z, double radius) {
+        return map.isWalkable(cellOf(x - radius), cellOf(z - radius))
+            && map.isWalkable(cellOf(x + radius), cellOf(z - radius))
+            && map.isWalkable(cellOf(x - radius), cellOf(z + radius))
+            && map.isWalkable(cellOf(x + radius), cellOf(z + radius));
     }
 
     private int cellOf(double coord) {
@@ -277,7 +294,14 @@ public class GameLoop {
         List<GameMap.Cell> spawns = map.getPlayerSpawns();
         GameMap.Cell cell = spawns.get(instance.getSessions().size() % spawns.size());
 
-        WorldEntity pawn = new WorldEntity(instance.nextEntityId(), "player", player.getId(),
+        //character SEMPRE presente aqui: SignalingWS grava a escolha do
+        //JoinRequest em Player antes de qualquer socket de jogo abrir (ver
+        //SignalingWS.handleTextMessage) — orElseThrow em vez de fallback
+        //silencioso, pra um bug de ordering quebrar alto em vez de spawnar
+        //um pawn com Movement de personagem errado.
+        String character = player.getCharacter().orElseThrow(
+            () -> new IllegalStateException("onPlayerArrived: " + player.getName() + " sem character — join não gravou a escolha?"));
+        WorldEntity pawn = new WorldEntity(instance.nextEntityId(), "player", character, player.getId(),
             cell.x() + 0.5, cell.z() + 0.5, 0.0); //+0.5 = centro da célula (tile = 1 unidade)
         instance.getWorld().put(pawn.getId(), pawn);
         instance.getSessions().put(player.getId(), session);
@@ -349,6 +373,6 @@ public class GameLoop {
     }
 
     private EntityDto toDto(WorldEntity e) {
-        return new EntityDto(e.getId(), e.getKind(), e.getOwner(), e.getX(), e.getZ(), e.getYaw(), e.getState());
+        return new EntityDto(e.getId(), e.getKind(), e.getCharacter(), e.getOwner(), e.getX(), e.getZ(), e.getYaw(), e.getState());
     }
 }

@@ -23,6 +23,13 @@ public class Player {
     //O campo é String crua; Optional é tipo de RETORNO (o getter embrulha) —
     //Optional.of(null) num setter lança NPE.
     private String websocketId;
+    //Qual personagem ("Dmitry"/"Nat") o player escolheu na tela pós-login -
+    //ver ModalPanel de escolha (client) e SignalingWS (grava aqui no
+    //JoinRequest). null até o primeiro join; mesma convenção do
+    //websocketId (Optional só no getter). Coluna "character_key" (não
+    //"character") - CHARACTER é palavra reservada em SQL/H2.
+    @Column(name = "character_key")
+    private String character;
 
 
     public Player(long id, String name, String password) {
@@ -56,6 +63,12 @@ public class Player {
     }
     public void setWebsocketId(String websocketId) {
         this.websocketId = websocketId;
+    }
+    public Optional<String> getCharacter() {
+        return Optional.ofNullable(character);
+    }
+    public void setCharacter(String character) {
+        this.character = character;
     }
     @Override
     public int hashCode() {

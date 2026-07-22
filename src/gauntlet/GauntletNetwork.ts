@@ -1,10 +1,11 @@
 import { utils, vec3 } from "wgpu-matrix";
 import { Behaviour } from "../behaviour"
 import PrefabFabricator from "../PrefabFabricator";
-import { JoinRequest } from "./dto/JoinMessage";
+import { joinRequest } from "./dto/JoinMessage";
 import { Node } from "../node";
 import { SpotLight } from "../Light";
 import { store } from "../redux/store";
+import { gauntletShowCharacterSelectionScreen } from "../redux/actions";
 import type { EntityDto, GameServerMessage, MapSyncMessage } from "./dto/ServerMessage";
 import type { PlayerControllerSettingsDto } from "./dto/PlayerControllerSettingsDto";
 import { destroyInstance } from "../prefab";
@@ -49,17 +50,24 @@ export default class GauntletNetworkBehaviour extends Behaviour{
     //Os ritos de conexão já foram disparados? (o update roda todo frame e a
     //flag do redux fica true pra sempre — sem isto seria um socket por frame)
     private connectionStarted = false;
+    //"Dmitry"/"Nat" — guardado aqui depois do fetch de player-controller-settings
+    //(connectSignaling) pra openSignalingSocket montar o JoinRequest com o
+    //MESMO valor que já foi usado pra calibrar a predição local.
+    private character!: string;
     //Parâmetros de movimento do server (GameLoop/PlayerControllerSettings) —
-    //buscados por GET /api/player-controller-settings em connectSignaling(),
-    //ANTES de abrir qualquer socket, então MineAvatarBehaviour (que só nasce
-    //depois do stateSync, bem mais tarde no fluxo) já lê os valores reais.
-    //Os números aqui são só fallback se o fetch falhar (ver catch) — nunca
-    //deveriam ser o que está de fato em uso.
+    //buscados por GET /api/player-controller-settings/{character} em
+    //connectSignaling(), ANTES de abrir qualquer socket, então MineAvatarBehaviour
+    //(que só nasce depois do stateSync, bem mais tarde no fluxo) já lê os
+    //valores reais. Os números aqui são só fallback se o fetch falhar (ver
+    //catch) — nunca deveriam ser o que está de fato em uso.
     moveSpeedForward = 3.0;
     moveSpeedBackward = 1.5;
     accel = 20.0;
     angularVelocityDegPerSec = 90.0;
     playerRadius = 0.3;
+    //parado gira mais rápido que andando (ver GameLoop.stepMovement) — este
+    //é o multiplicador; MineAvatarBehaviour aplica só quando move===0.
+    idleTurnMultiplier = 1.5;
     private fabricator!: PrefabFabricator;
     private readonly tileWidth:number;
     private readonly tileHeight:number;
@@ -114,15 +122,17 @@ export default class GauntletNetworkBehaviour extends Behaviour{
         return [dCellsX * this.tileWidth, dCellsZ * this.tileHeight];
     }
 
-    //Os ritos de entrada: primeiro os parâmetros de movimento (GET, só depois
+    //Os ritos de entrada, depois do modal de personagem resolver (ver update()):
+    //primeiro os parâmetros de movimento DESTE personagem (GET, só depois
     //disso resolver é que abre QUALQUER socket — ver openSignalingSocket),
-    //depois signaling (join = reserva de vaga) e, com o ok, o socket de jogo.
-    //Pressupõe sessão já autenticada — o POST /login foi feito pela UI e o
-    //fetch/handshakes WS herdam o cookie.
-    private connectSignaling(): void {
-        fetch("/api/player-controller-settings")
+    //depois signaling (join = reserva de vaga, carregando o character junto)
+    //e, com o ok, o socket de jogo. Pressupõe sessão já autenticada — o
+    //POST /login foi feito pela UI e o fetch/handshakes WS herdam o cookie.
+    private connectSignaling(character: string): void {
+        this.character = character;
+        fetch(`/api/player-controller-settings/${character}`)
             .then(res => {
-                if (!res.ok) throw new Error(`GET /api/player-controller-settings: HTTP ${res.status}`);
+                if (!res.ok) throw new Error(`GET /api/player-controller-settings/${character}: HTTP ${res.status}`);
                 return res.json() as Promise<PlayerControllerSettingsDto>;
             })
             .then(settings => {
@@ -131,6 +141,7 @@ export default class GauntletNetworkBehaviour extends Behaviour{
                 this.accel = settings.accel;
                 this.angularVelocityDegPerSec = settings.angularVelocityDegPerSec;
                 this.playerRadius = settings.playerRadius;
+                this.idleTurnMultiplier = settings.idleTurnMultiplier;
             })
             .catch(err => {
                 //Sem isto o login travaria mudo se o fetch falhasse (connectionStarted
@@ -143,12 +154,17 @@ export default class GauntletNetworkBehaviour extends Behaviour{
 
     private openSignalingSocket(): void {
         this.wsSignaling = new WebSocket(`ws://${location.host}/ws/signaling`);
-        this.wsSignaling.onopen = ()=>this.wsSignaling.send(JSON.stringify(JoinRequest));
+        this.wsSignaling.onopen = ()=>this.wsSignaling.send(JSON.stringify(joinRequest(this.character)));
         this.wsSignaling.onmessage = e=> {
             const msg = JSON.parse(e.data);
             //Tive sucesso em dar join - já tem um slot em uma instância reservado pra mim,
             if(msg.operation === "join" && msg.result ==="ok") {
                 this.connectGame();
+            } else if (msg.operation === "join") {
+                //"alreadyInGame"/"badCharacter" — não deveria acontecer no
+                //fluxo normal (modal só oferece characters válidos); loga alto
+                //em vez de deixar a conexão pendurada muda.
+                console.error("GauntletNetwork: join recusado pelo server:", msg.result);
             }
         }
     }
@@ -251,20 +267,30 @@ export default class GauntletNetworkBehaviour extends Behaviour{
             //behaviour no PIVOT (não no skin): é o pivot que representa "a
             //entidade" (posição+yaw movem ele), e o skin embaixo dele fica
             //livre pra eventual lógica de animação futura sem competir por
-            //quem é dono do transform.
-            this.fabricator.fabricate([0, 0, 0], isMine ? "alice" : "bob", pivot);
+            //quem é dono do transform. ent.character ("Dmitry"/"Nat") já É o
+            //nome do prefab — mandado pelo server pra TODO client, não só o
+            //dono, então Bob vê o MESMO personagem que a Alice escolheu.
+            this.fabricator.fabricate([0, 0, 0], ent.character, pivot);
 
             //Luz fraca acima do player: cada avatar carrega sua própria
             //spotlight, apontada pra baixo, reforçando o char perto do chão
-            //sem depender só da luz de teto (ver gauntletWorld.ts). Filha do
-            //pivot: acompanha posição/yaw automaticamente.
+            //sem depender só da luz global (ver gauntletWorld.ts — agora um
+            //DirectionalLight de verdade, que é quem ilumina/sombreia a
+            //dungeon inteira). Filha do pivot: acompanha posição/yaw
+            //automaticamente. Altura reduzida de 8 pra 2.5: 8 unidades acima
+            //de um personagem de ~2 de altura é praticamente um lustre longe
+            //dele — a ~90° do topo da cabeça, não "acima" no sentido visual
+            //(um cone estreito lá de cima mal cobre o corpo). 2.5 deixa o
+            //cone efetivamente pairando sobre o personagem. atten =
+            //intensity/dist (linear, ver PhongColorMaterial) = 1.0/2.5 = 0.4,
+            //bem mais fraco que o 12/8=1.5 de antes.
             const headLight = new Node();
             headLight.name = "PlayerLight";
             headLight.setParent(pivot);
-            vec3.set(0, 8, 0, headLight.position);
+            vec3.set(0, 6, 0, headLight.position);
             const spot = new SpotLight();
             spot.color = [1, 0.95, 0.85];
-            spot.intensity = 3; //fraquinha de propósito
+            spot.intensity = 2.0; //fraquinha de propósito
             spot.innerConeAngle = utils.degToRad(30);
             spot.outerConeAngle = utils.degToRad(60);
             headLight.light = spot;
@@ -390,10 +416,18 @@ export default class GauntletNetworkBehaviour extends Behaviour{
     update(_deltaTime: number): void {
         //Gatilho da conexão (padrão getState-no-update da casa): a UI fez o
         //POST /login e flipou a flag; daqui pra frente a sessão está
-        //autenticada e dá pra abrir os WS.
+        //autenticada. Duas etapas antes de abrir qualquer WS: 1) escolher
+        //personagem (modal — GauntletCharacterSelectPanel.tsx despacha
+        //gauntletCharacterChosen quando o player clica), 2) só então
+        //connectSignaling, que já sabe qual character buscar/mandar.
         if(!this.connectionStarted && store.getState().gauntlet.loggedIn){
-            this.connectionStarted = true;
-            this.connectSignaling();
+            const gauntlet = store.getState().gauntlet;
+            if(gauntlet.character !== null){
+                this.connectionStarted = true;
+                this.connectSignaling(gauntlet.character);
+            } else if(!gauntlet.choosingCharacter){
+                store.dispatch(gauntletShowCharacterSelectionScreen());
+            }
         }
         //Dead reckoning dos remotos e correção de resíduo do pawn local agora
         //rodam dentro de cada NetworkedEntityBehaviour (World.update já visita

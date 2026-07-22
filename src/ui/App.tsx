@@ -27,6 +27,7 @@ import { CtfEditorPanel } from "./ctf/CtfEditorPanel";
 import { GauntletWorld } from "../gauntlet/gauntletWorld";
 import { GauntletLoginPanel } from "./gauntlet/GauntletLoginPanel";
 import { GauntletShadowSettingsPanel } from "./gauntlet/GauntletShadowSettingsPanel";
+import { GauntletCharacterSelectPanel } from "./gauntlet/GauntletCharacterSelectPanel";
 import RaycastESSToDos from "./raycast_ess/raycastESSToDos";
 
 export function TerraPositionTable({ world }: { world: World }) {
@@ -109,6 +110,7 @@ function WorldUi({ world }: { world: World }) {
             <div>
                 <GauntletLoginPanel />
                 <GauntletShadowSettingsPanel />
+                <GauntletCharacterSelectPanel />
             </div>
         );
     }

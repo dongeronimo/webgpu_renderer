@@ -9,6 +9,7 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import java.util.List;
+import java.util.Map;
 
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
@@ -34,10 +35,14 @@ public class GameLoopTest {
     private final MapGenerator generator = new MapGenerator();
 
     //mock em vez de subir Spring/H2 pra um teste que não é sobre persistence -
-    //mesmos valores default de PlayerControllerSettingsPersistence.defaults().
+    //mesmos valores default de PlayerControllerSettingsPersistence.defaults()
+    //(uma linha por personagem agora - Alice usa Dmitry, Bob usa Nat nos
+    //testes abaixo, só pra exercitar os dois).
     private static GameLoop newGameLoop() {
         PlayerControllerSettingsPersistence settings = mock(PlayerControllerSettingsPersistence.class);
-        when(settings.get()).thenReturn(new PlayerControllerSettings(1, 3.0, 1.5, 20.0, 90.0, 0.05, 0.3));
+        when(settings.getAll()).thenReturn(Map.of(
+            "Dmitry", new PlayerControllerSettings(1, "Dmitry", 3.0, 1.5, 20.0, 90.0, 0.05, 0.3, 1.5),
+            "Nat", new PlayerControllerSettings(2, "Nat", 3.6, 1.9, 24.0, 110.0, 0.05, 0.26, 1.5)));
         return new GameLoop(new ObjectMapper(), null, settings);
     }
 
@@ -57,6 +62,7 @@ public class GameLoopTest {
     void chegadaRecebeOsTresSyncsNaOrdemEDepoisSnap() throws Exception {
         Instance instance = instancia();
         Player alice = new Player(1, "Alice", "foobar");
+        alice.setCharacter("Dmitry");
         WebSocketSession session = mock(WebSocketSession.class);
         instance.enqueue(new InstanceEvent.PlayerArrived(alice, session));
 
@@ -77,7 +83,9 @@ public class GameLoopTest {
     void veteranoRecebeSpawnDoNovatoENovatoRecebeTodoMundoNoStateSync() throws Exception {
         Instance instance = instancia();
         Player alice = new Player(1, "Alice", "foobar");
+        alice.setCharacter("Dmitry");
         Player bob = new Player(2, "Bob", "lorenipsun");
+        bob.setCharacter("Nat");
         WebSocketSession sessaoAlice = mock(WebSocketSession.class);
         WebSocketSession sessaoBob = mock(WebSocketSession.class);
 
@@ -102,7 +110,9 @@ public class GameLoopTest {
     void saidaViraDespawnProsQueFicam() throws Exception {
         Instance instance = instancia();
         Player alice = new Player(1, "Alice", "foobar");
+        alice.setCharacter("Dmitry");
         Player bob = new Player(2, "Bob", "lorenipsun");
+        bob.setCharacter("Nat");
         WebSocketSession sessaoAlice = mock(WebSocketSession.class);
         WebSocketSession sessaoBob = mock(WebSocketSession.class);
         instance.enqueue(new InstanceEvent.PlayerArrived(alice, sessaoAlice));

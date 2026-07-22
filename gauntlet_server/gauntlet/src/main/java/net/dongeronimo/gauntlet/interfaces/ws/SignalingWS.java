@@ -14,6 +14,7 @@ import net.dongeronimo.gauntlet.interfaces.transferObjects.ClientMessage;
 import net.dongeronimo.gauntlet.interfaces.transferObjects.JoinRequest;
 import net.dongeronimo.gauntlet.interfaces.transferObjects.JoinResponse;
 import net.dongeronimo.gauntlet.interfaces.transferObjects.ServerMessage;
+import net.dongeronimo.gauntlet.persistence.PlayerControllerSettingsPersistence;
 import net.dongeronimo.gauntlet.persistence.PlayerPersistence;
 import net.dongeronimo.gauntlet.services.InstanceService;
 import net.dongeronimo.gauntlet.services.JoinResult;
@@ -39,13 +40,21 @@ public class SignalingWS extends TextWebSocketHandler {
      * mais alto de abstração que as do persistence. Então é um service e não a persistence.
      */
     private InstanceService instanceService;
+    /**
+     * Valida o character do JoinRequest contra as linhas que existem de
+     * verdade (Dmitry/Nat hoje) antes de gravar em Player — sem isto um
+     * client malicioso/bugado manda um character qualquer e só explode
+     * depois, lá no GameLoop.onPlayerArrived (bem mais difícil de debugar).
+     */
+    private PlayerControllerSettingsPersistence settingsPersistence;
 
-    public SignalingWS(PlayerPersistence playerPersistence, 
+    public SignalingWS(PlayerPersistence playerPersistence,
         ObjectMapper objMapper, MapGenerator mapGenerator,
-        InstanceService instanceService) {
+        InstanceService instanceService, PlayerControllerSettingsPersistence settingsPersistence) {
         this.playerPersistence = playerPersistence;
         this.objectMapper = objMapper;
         this.instanceService = instanceService;
+        this.settingsPersistence = settingsPersistence;
     }
     /**    
      * Quando o player entra eu preciso amarrá-lo ao websocket session.
@@ -79,12 +88,23 @@ public class SignalingWS extends TextWebSocketHandler {
             return;
         }
         
-        if(msg instanceof JoinRequest) {
+        if(msg instanceof JoinRequest(String character)) {
             ServerMessage resposta;
             if(session.getAttributes().get("instance") != null){
                 //fast-path: ESTA sessão já deu join
                 resposta = new JoinResponse("alreadyInGame", null);
+            }else if(!settingsPersistence.isKnownCharacter(character)) {
+                //client mandou um character que não existe na tabela — o
+                //modal só oferece Dmitry/Nat, então isto só acontece com
+                //client desatualizado/malicioso. Não entra em instância nenhuma.
+                resposta = new JoinResponse("badCharacter", null);
             }else {
+                //Grava a escolha ANTES do join: GameWS re-busca o Player fresco
+                //do banco quando o socket de jogo conecta (afterConnectionEstablished),
+                //então este save é o que garante que aquele fetch já vê o
+                //character — GameLoop.onPlayerArrived confia nisso (orElseThrow).
+                currentPlayer.setCharacter(character);
+                playerPersistence.save(currentPlayer);
                 //Entra em uma instance
                 JoinResult result = instanceService.joinInstance(currentPlayer);
                 if(result.ok()) {

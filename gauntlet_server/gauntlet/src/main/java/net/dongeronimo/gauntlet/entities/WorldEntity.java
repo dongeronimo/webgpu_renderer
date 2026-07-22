@@ -8,8 +8,15 @@ package net.dongeronimo.gauntlet.entities;
 public class WorldEntity {
     /** Identidade de ENTIDADE, atribuída pela instância — não confundir com id de conta. */
     private final long id;
-    /** "player" por ora; "monster" e afins entram no 1b. */
+    /** "player" por ora; "monster" e afins entram no 1b. Categoria pra REGRAS
+     *  de simulação (GameLoop filtra por isto) — não confundir com `character`,
+     *  que é aparência/stats (qual prefab renderizar, qual PlayerControllerSettings usar). */
     private final String kind;
+    /** Qual personagem jogável ("Dmitry"/"Nat") — decide o prefab no client
+     *  (EntityDto.character) e o PlayerControllerSettings usado pra este pawn
+     *  no GameLoop (kind continua "player" pros dois). Pros kinds futuros
+     *  sem seleção de personagem (monster, treasure) isto não significa nada. */
+    private final String character;
     /** Pra kind=player: o id da CONTA dona do pawn. Pros outros kinds não significa nada. */
     private final long owner;
     private double x;
@@ -26,9 +33,10 @@ public class WorldEntity {
      */
     private String state = "idle";
 
-    public WorldEntity(long id, String kind, long owner, double x, double z, double yaw) {
+    public WorldEntity(long id, String kind, String character, long owner, double x, double z, double yaw) {
         this.id = id;
         this.kind = kind;
+        this.character = character;
         this.owner = owner;
         this.x = x;
         this.z = z;
@@ -37,6 +45,7 @@ public class WorldEntity {
 
     public long getId() { return id; }
     public String getKind() { return kind; }
+    public String getCharacter() { return character; }
     public long getOwner() { return owner; }
     public double getX() { return x; }
     public double getZ() { return z; }

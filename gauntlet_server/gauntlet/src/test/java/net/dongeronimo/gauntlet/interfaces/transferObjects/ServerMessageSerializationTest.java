@@ -57,10 +57,11 @@ public class ServerMessageSerializationTest {
     @Test
     void spawnCarregaORetratoCompletoDaEntidade() {
         String json = mapper.writeValueAsString(
-            new Spawn(List.of(new EntityDto(9, "player", 9, 0, 0, 0, "idle"))));
+            new Spawn(List.of(new EntityDto(9, "player", "Dmitry", 9, 0, 0, 0, "idle"))));
         System.out.println("spawn: " + json);
         assertTrue(json.contains("\"operation\":\"spawn\""));
         assertTrue(json.contains("\"kind\":\"player\""));
+        assertTrue(json.contains("\"character\":\"Dmitry\""));
         assertTrue(json.contains("\"owner\":9"));
         assertTrue(json.contains("\"state\":\"idle\""));
     }
