@@ -8,7 +8,7 @@ export default defineConfig({
     //Porta vem da env var PORT (ex.: `$env:PORT=4000; npm run dev` no PowerShell).
     //Sem PORT cai no default 5173. Linha idêntica em todos os branches p/ não conflitar em merge.
     server: {
-        port: Number(process.env.PORT) || 5173,
+        port: Number(process.env.PORT) || 5174, //mudei hardcoded pra 5174 pra poder testar dois branches separados ao mesmo tempo
          proxy: {
       "/ws":     { target: "ws://localhost:8080", ws: true },
       "/login":  { target: "http://localhost:8080", changeOrigin: false },

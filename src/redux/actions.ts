@@ -54,10 +54,19 @@ export type GradientMode = "precalculated" | "on-the-fly";
  * Os mundos da app, como union e não string solta — mesmo critério do
  * RenderPassBit: typo morre em compile time. Cresce junto com os mundos.
  */
-export type WorldName = "solarSystem" | "textureStackVolumeRenderSynthetic" |
-"textureStackVolumeRenderCT" | "StarshipDemo" | "raycast" | "raycastESS" |
-"gameVolume" | "train" |
-"textureStackVolumeRenderCT" | "StarshipDemo" | "SkinningDemo" | "gauntlet";
+export type WorldName = 
+    "solarSystem" | 
+    "textureStackVolumeRenderSynthetic" |
+    "textureStackVolumeRenderCT" | 
+    //"StarshipDemo" | 
+    "raycast" | 
+    "raycastESS" |
+    "gameVolume" | 
+    //"train" |
+    "textureStackVolumeRenderCT"; //| 
+    //"StarshipDemo" | 
+   // "SkinningDemo" | 
+    //"gauntlet";
 
 export interface HelloClickedAction {
     type: typeof HELLO_CLICKED;
