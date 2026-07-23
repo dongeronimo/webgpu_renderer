@@ -113,7 +113,7 @@ def point_dns(r53, dist_domain):
 
 def main():
     if not FRONTEND_INFO.exists():
-        sys.exit("deploy/frontend.json nao existe - rode frontend_provision.py primeiro.")
+        sys.exit("deploy/frontend.json nao existe - rode provision_frontend.py primeiro.")
     info = json.loads(FRONTEND_INFO.read_text())
     dist_id, dist_domain = info["distribution_id"], info["domain"]
 

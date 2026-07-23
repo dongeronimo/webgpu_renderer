@@ -1,6 +1,8 @@
 import { Node } from "./node";
 import { destroyRegisteredMaterials } from "./material";
 import { destroyInstance } from "./prefab";
+import { store } from "./redux/store";
+import { hideLoadingScreen, showLoadingScreen } from "./redux/actions";
 /**
  * O mundo tem um nó raiz chamado ROOT e é dono da própria sequência de
  * render passes — cada mundo renderiza de um jeito (este com mesh+final,
@@ -18,8 +20,11 @@ import { destroyInstance } from "./prefab";
 export abstract class World  {
     protected rootNode:Node;
     protected readonly device:GPUDevice;
+    //true até o 1º update() rodar: é o gatilho que baixa a tela de carga que o
+    //ctor levantou. Privado — o ciclo é interno da base; nenhum subclasse mexe.
+    private firstLoading = true;
     /**
-     * Cria o mundo. 
+     * Cria o mundo.
      */
     constructor(device:GPUDevice){
         this.rootNode = new Node();
@@ -29,6 +34,11 @@ export abstract class World  {
         //elas não passam pelo caminho que seta .world nos nós com behaviour.
         this.rootNode.world = this;
         this.device = device;
+        //Levanta a tela de carga assim que o mundo começa a nascer. O createWorld
+        //(assíncrono, é o que demora — fetch de assets + upload pra GPU) roda em
+        //seguida no main, e o await dele dá o respiro pro React pintar o modal
+        //antes do 1º frame. O 1º update() a baixa (ver abaixo).
+        store.dispatch(showLoadingScreen());
     }
     /** Raiz da árvore de cena — é daqui que os render passes percorrem o mundo. */
     public get root(): Node {
@@ -125,7 +135,16 @@ export abstract class World  {
      * (que já fechou a matriz) só aparece no frame seguinte.
     */
     public update(deltaTime:number) {
-        
+        //1º frame do mundo: o createWorld já terminou (o main só chama update
+        //depois) e a árvore vai ser percorrida agora — é seguro esconder a tela
+        //de carga que o ctor levantou. Só aqui mexemos no state por causa dela;
+        //depois o flag fica false e nenhum frame volta a despachar. Subclasses
+        //que sobrescrevem update() têm que chamar super.update() (o GauntletWorld
+        //já chama) — senão a tela nunca baixa.
+        if (this.firstLoading) {
+            this.firstLoading = false;
+            store.dispatch(hideLoadingScreen());
+        }
         this.scheduledNodesForDestruction = [];
         const visit = (node:Node) => {
             for (const behaviour of node.behaviours) {

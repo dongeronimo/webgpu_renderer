@@ -11,6 +11,13 @@ export const HELLO_CLICKED = "HELLO_CLICKED";
 //nome == valor: é o VALOR que aparece em logs/devtools, e grep tem que achar
 export const SWITCH_WORLD = "SWITCH_WORLD";
 
+//Tela de carga (modal bloqueante da UI base): o ctor do World a levanta e o
+//1º update() dele a baixa — ver world.ts. Flag no base (não num mundo) porque
+//a tela é da app: sobrevive à troca de mundo, igual ao WorldSwitch. O modal é
+//só um spinner, SEM barra de progresso de propósito — a carga (fetch de assets
+//+ upload pra GPU) não tem como ser contabilizada em porcentagem.
+export const SET_LOADING = "SET_LOADING";
+
 export const TEXTURE_BASED_CT_SET_NUM_SLICES = "TEXTURE_BASED_CT_SET_NUM_SLICES";
 
 export const CTF_SET_POINTS = "CTF_SET_POINTS";
@@ -91,6 +98,11 @@ export interface HelloClickedAction {
 export interface SwitchWorldAction {
     type: typeof SWITCH_WORLD;
     payload: WorldName;
+}
+
+export interface SetLoadingAction {
+    type: typeof SET_LOADING;
+    payload: boolean;
 }
 
 export interface SetTextureBasedCTNumSlicesAction {
@@ -187,6 +199,16 @@ export function switchWorld(world: WorldName): SwitchWorldAction {
     return { type: SWITCH_WORLD, payload: world };
 }
 
+//Dois creators nomeados (como o gauntletShow/HideCharacterSelectionScreen) pra
+//os call sites lerem bem: o ctor do World chama show, o 1º update() chama hide.
+export function showLoadingScreen(): SetLoadingAction {
+    return { type: SET_LOADING, payload: true };
+}
+
+export function hideLoadingScreen(): SetLoadingAction {
+    return { type: SET_LOADING, payload: false };
+}
+
 export function setTextureBasedCTNumSlices(val:number):SetTextureBasedCTNumSlicesAction{
     return {type: TEXTURE_BASED_CT_SET_NUM_SLICES, payload: val};
 }
@@ -260,6 +282,7 @@ export function gauntletCharacterChosen(character: string): GauntletCharacterCho
 export type AppAction =
     | HelloClickedAction
     | SwitchWorldAction
+    | SetLoadingAction
     | SetTextureBasedCTNumSlicesAction
     | SetCtfPointsAction
     | SetCtfHuRangeAction

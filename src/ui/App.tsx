@@ -15,6 +15,7 @@ import { usePolled } from "./usePolled";
 import { TextureStackVolumeRenderUIRoot } from "./TextureStackVolumeRenderUIRoot";
 import TbCTRenderProperties from "./textureBasedCT/tbCTRenderProperties";
 import { WorldSwitch } from "./base/WorldSwitch";
+import { LoadingScreen } from "./base/LoadingScreen";
 import { FloatingPanel } from "./generic/FloatingPanel";
 import { GpuStats } from "./GpuStats";
 import { RaycastWorld } from "../raycast/raycastWorld";
@@ -139,6 +140,10 @@ export function App({ world }: { world: World }) {
                 || world instanceof RaycastWorld
                 || world instanceof RaycastESSWorld) && <CtfEditorPanel />}
             <WorldSwitch />
+            {/*Tela de carga: UI base como o WorldSwitch (sobrevive à troca) e
+               por cima de tudo (z-index do ModalPanel). Aparece sozinha lendo
+               base.loading — o ctor/1º update() de cada mundo é quem liga/desliga.*/}
+            <LoadingScreen />
             {/*desempenho é da app, como o WorldSwitch: é o instrumento de
                comparação ENTRE mundos, sobrevive à troca*/}
             <FloatingPanel title="Desempenho" width={200} height="auto" style={{ bottom: 8, left: 8 }}>

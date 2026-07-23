@@ -65,14 +65,21 @@ async function main() {
   //Boot no mundo de skinning (etapa atual do trabalho). Tem que casar com o
   //currentWorld inicial do reducer, senão o loop detecta "troca" no 1º frame.
   const bootWorld = new SkinningDemoWorld(device);
-  bootWorld.createRenderPasses(canvas,  canvasFormat);
-  await bootWorld.createWorld({aspect:canvas.width/canvas.height, fovy:45, near:0.1, far:100});
   //UI React no overlay por cima do canvas; recebe o mundo pra poder ler
   //o scene graph (usePolled). O outro canal, UI→engine, é o store redux.
   //mountUi monta o root React uma única vez; setUiWorld aponta a UI pro
   //mundo ativo — na troca, é só chamar de novo com o mundo novo.
+  //
+  //Montamos ANTES do createWorld de propósito: o ctor do bootWorld já levantou
+  //a tela de carga (loading=true), e montar aqui faz o React pintar o modal
+  //durante o await createWorld abaixo. Sem isso, o 1º mundo carregaria com a
+  //tela em branco — o React só apareceria DEPOIS da carga (nas trocas seguintes
+  //ele já está montado, então lá o modal sempre aparece). A UI aguenta um mundo
+  //ainda sem conteúdo: lê os nós por polling e trata a ausência.
   const setUiWorld = mountUi(document.getElementById("ui-root")!);
   setUiWorld(bootWorld);
+  bootWorld.createRenderPasses(canvas,  canvasFormat);
+  await bootWorld.createWorld({aspect:canvas.width/canvas.height, fovy:45, near:0.1, far:100});
 
   currentWorld = bootWorld;
   //Loop de animação: o browser chama frame() a cada vsync (~60x/s),

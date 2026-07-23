@@ -2,7 +2,7 @@
 //switch e spread — sem toolkit, sem immer.
 import { combineReducers } from "redux";
 import type { CtfPoint } from "../ctf";
-import { CTF_SET_POINTS, GAUNTLET_CHARACTER_CHOSEN, GAUNTLET_CHOOSING_CHARACTER, GAUNTLET_LOGIN_SUCCEEDED, HELLO_CLICKED, ORBIT_CAMERA, SET_ALPHA_SCALE, SET_CTF_HU_RANGE, SET_DEBUG_VIEW_ACTIVE, SET_GAUNTLET_SHADOW_MAP_SIZE, SET_RAYCAST_ESS, SET_RAYCAST_ESS_DEBUG, SET_RAYCAST_FRAMEBUFFER_SCALE, SET_RAYCAST_GRADIENT_MODE, SET_RAYCAST_GRADIENT_SHADING, SWITCH_WORLD, TEXTURE_BASED_CT_SET_NUM_SLICES, ZOOM_CAMERA, type AppAction, type GradientMode, type WorldName } from "./actions";
+import { CTF_SET_POINTS, GAUNTLET_CHARACTER_CHOSEN, GAUNTLET_CHOOSING_CHARACTER, GAUNTLET_LOGIN_SUCCEEDED, HELLO_CLICKED, ORBIT_CAMERA, SET_ALPHA_SCALE, SET_CTF_HU_RANGE, SET_DEBUG_VIEW_ACTIVE, SET_GAUNTLET_SHADOW_MAP_SIZE, SET_LOADING, SET_RAYCAST_ESS, SET_RAYCAST_ESS_DEBUG, SET_RAYCAST_FRAMEBUFFER_SCALE, SET_RAYCAST_GRADIENT_MODE, SET_RAYCAST_GRADIENT_SHADING, SWITCH_WORLD, TEXTURE_BASED_CT_SET_NUM_SLICES, ZOOM_CAMERA, type AppAction, type GradientMode, type WorldName } from "./actions";
 
 export interface HelloState {
     /** Quantas vezes o botão de hello foi clicado. */
@@ -14,6 +14,10 @@ export interface HelloState {
 export interface BaseState {
     //Qual é o mundo atual?
     currentWorld: WorldName;
+    //A tela de carga (modal bloqueante) está de pé? O ctor de qualquer World a
+    //liga; o 1º update() dele a desliga (ver world.ts). É estado da app, não
+    //de um mundo — por isso mora aqui, junto do currentWorld.
+    loading: boolean;
 }
 
 /**
@@ -114,6 +118,9 @@ const gauntletInitial: GauntletState = {
 
 const baseInitial: BaseState = {
     currentWorld: "SkinningDemo",
+    //Começa false: quem liga é o ctor do bootWorld (no main), que roda antes
+    //da UI montar — quando o React aparece o valor já reflete o mundo em carga.
+    loading: false,
 };
 
 const textureBasedCTInitial: TextureBasedCTState = {
@@ -223,6 +230,8 @@ function baseReducer(state: BaseState = baseInitial, action: AppAction): BaseSta
     switch (action.type) {
         case SWITCH_WORLD:
             return { ...state, currentWorld: action.payload };
+        case SET_LOADING:
+            return { ...state, loading: action.payload };
         default:
             return state;
     }

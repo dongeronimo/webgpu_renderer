@@ -2,18 +2,20 @@
 """
 Provisiona o frontend: bucket S3 privado + distribuicao CloudFront. Roda UMA vez.
 
-O CloudFront faz em producao o papel que o proxy do Vite faz em dev:
+O CloudFront faz em producao o papel do proxy do Vite:
   - origem S3 (privada, via OAC): serve o dist/ - index.html, JS, e os assets
-    pesados (volumes CT, .glb, texturas). E o comportamento default.
-  - origem backend (o Lightsail via seu DNS ec2-...compute.amazonaws.com, HTTP
-    na 8080): recebe /ws/*, /api/*, /login, /logout. SEM cache e repassando
-    cookies/headers - a sessao do Spring Security depende do cookie, e o
-    handshake do WS carrega ele.
+    pesados (volumes CT, .glb, texturas). Comportamento default, com cache.
+  - origem backend (Lightsail via DNS ec2-...compute.amazonaws.com, HTTP na
+    8080): recebe /ws/*, /api/*, /login, /logout. SEM cache e com a origin
+    request policy custom 'gauntlet-backend-orp', que repassa todo o viewer
+    (cookies, Host, headers do WebSocket) MAIS o header CloudFront-Forwarded-
+    Proto. Esse header e como o Spring descobre que o request original era
+    https (o CloudFront termina o TLS e fala HTTP com a origem); sem ele o
+    login redireciona http:// e o browser bloqueia como mixed content. O
+    backend le esse header via server.forward-headers-strategy=native +
+    server.tomcat.remoteip.protocol-header=CloudFront-Forwarded-Proto.
 
-Resultado: o frontend continua com URLs relativas, um dominio so, sem CORS.
-Comeca no dominio gratis *.cloudfront.net (HTTPS incluso). Dominio proprio e
-um passo nao-destrutivo depois (anexa cert ACM em us-east-1 + alternate name).
-
+Comeca no dominio *.cloudfront.net; use add_domain.py pro dominio proprio.
 Le o IP do backend de deploy/instance.json. Requer: pip install boto3
 """
 import json
@@ -24,22 +26,47 @@ from pathlib import Path
 import boto3
 
 REGION = "sa-east-1"
-COMMENT = "gauntlet-frontend"  # identifica a distribuicao (idempotencia)
+COMMENT = "gauntlet-frontend"        # identifica a distribuicao (idempotencia)
+BACKEND_POLICY_NAME = "gauntlet-backend-orp"
 
 HERE = Path(__file__).resolve().parent
 INSTANCE_INFO = HERE / "instance.json"
 FRONTEND_INFO = HERE / "frontend.json"
 
-# IDs de policies gerenciadas pela AWS (estaveis em qualquer conta):
+# Policies gerenciadas pela AWS (IDs estaveis em qualquer conta):
 CACHING_OPTIMIZED = "658327ea-f89d-4fab-a63d-7e88639e58f6"   # cache p/ estatico
 CACHING_DISABLED = "4135ea2d-6df8-44a3-9df3-4b5a84be39ad"    # sem cache p/ backend
-ALL_VIEWER = "216adef6-5c7f-47e4-b989-5492eafa07d3"          # repassa tudo p/ origem
 
 
-def backend_behavior(path_pattern, backend_id):
-    # Rota dinamica: sem cache, repassa cookies/headers/query pro backend.
-    # GET/HEAD cobre o handshake do WS (que e um GET com Upgrade); os demais
-    # metodos cobrem os POST de /login e /api.
+def ensure_backend_policy(cf):
+    # Origin request policy custom: repassa TODO o viewer + o CloudFront-
+    # Forwarded-Proto (que o proprio CloudFront adiciona refletindo o protocolo
+    # do viewer). Nao da pra usar X-Forwarded-Proto: o CloudFront nao entrega
+    # esse nome nem como custom origin header nem via Function.
+    lst = cf.list_origin_request_policies(Type="custom")["OriginRequestPolicyList"]
+    for item in lst.get("Items", []):
+        if item["OriginRequestPolicy"]["OriginRequestPolicyConfig"]["Name"] == BACKEND_POLICY_NAME:
+            print("Origin request policy do backend ja existe.")
+            return item["OriginRequestPolicy"]["Id"]
+    cfg = {
+        "Name": BACKEND_POLICY_NAME,
+        "Comment": "repassa tudo do viewer + CloudFront-Forwarded-Proto (p/ o Spring saber que e https)",
+        "CookiesConfig": {"CookieBehavior": "all"},
+        "QueryStringsConfig": {"QueryStringBehavior": "all"},
+        "HeadersConfig": {
+            "HeaderBehavior": "allViewerAndWhitelistCloudFront",
+            "Headers": {"Quantity": 1, "Items": ["CloudFront-Forwarded-Proto"]},
+        },
+    }
+    pid = cf.create_origin_request_policy(
+        OriginRequestPolicyConfig=cfg)["OriginRequestPolicy"]["Id"]
+    print("Origin request policy do backend criada.")
+    return pid
+
+
+def backend_behavior(path_pattern, backend_id, orp_id):
+    # Rota dinamica: sem cache, repassa cookies/headers/query via a ORP custom.
+    # GET/HEAD cobre o handshake do WS; os demais metodos cobrem POST de /login e /api.
     return {
         "PathPattern": path_pattern,
         "TargetOriginId": backend_id,
@@ -51,16 +78,14 @@ def backend_behavior(path_pattern, backend_id):
             "CachedMethods": {"Quantity": 2, "Items": ["GET", "HEAD"]},
         },
         "CachePolicyId": CACHING_DISABLED,
-        "OriginRequestPolicyId": ALL_VIEWER,
+        "OriginRequestPolicyId": orp_id,
     }
 
 
 def ensure_bucket(s3, bucket):
     try:
-        s3.create_bucket(
-            Bucket=bucket,
-            CreateBucketConfiguration={"LocationConstraint": REGION},
-        )
+        s3.create_bucket(Bucket=bucket,
+                         CreateBucketConfiguration={"LocationConstraint": REGION})
         print(f"Bucket '{bucket}' criado.")
     except s3.exceptions.BucketAlreadyOwnedByYou:
         print(f"Bucket '{bucket}' ja existe.")
@@ -92,7 +117,7 @@ def find_distribution(cf):
     return None
 
 
-def create_distribution(cf, bucket, oac_id, backend_dns):
+def create_distribution(cf, bucket, oac_id, backend_dns, orp_id):
     s3_id, backend_id = "s3-frontend", "backend"
     config = {
         "CallerReference": str(time.time()),
@@ -112,12 +137,6 @@ def create_distribution(cf, bucket, oac_id, backend_dns):
             {
                 "Id": backend_id,
                 "DomainName": backend_dns,
-                # Avisa o Spring que o request original era HTTPS (o CloudFront
-                # termina o TLS e fala HTTP com a origem). Sem isto o redirect
-                # pos-login sai http:// e o browser bloqueia (mixed content).
-                "CustomHeaders": {"Quantity": 1, "Items": [
-                    {"HeaderName": "X-Forwarded-Proto", "HeaderValue": "https"},
-                ]},
                 "CustomOriginConfig": {
                     "HTTPPort": 8080,
                     "HTTPSPort": 443,
@@ -139,10 +158,10 @@ def create_distribution(cf, bucket, oac_id, backend_dns):
             "CachePolicyId": CACHING_OPTIMIZED,
         },
         "CacheBehaviors": {"Quantity": 4, "Items": [
-            backend_behavior("/ws/*", backend_id),
-            backend_behavior("/api/*", backend_id),
-            backend_behavior("/login", backend_id),
-            backend_behavior("/logout", backend_id),
+            backend_behavior("/ws/*", backend_id, orp_id),
+            backend_behavior("/api/*", backend_id, orp_id),
+            backend_behavior("/login", backend_id, orp_id),
+            backend_behavior("/logout", backend_id, orp_id),
         ]},
         "ViewerCertificate": {"CloudFrontDefaultCertificate": True},
     }
@@ -152,7 +171,6 @@ def create_distribution(cf, bucket, oac_id, backend_dns):
 
 
 def attach_bucket_policy(s3, bucket, dist_arn):
-    # Deixa SO esta distribuicao CloudFront ler o bucket (que segue privado).
     policy = {
         "Version": "2008-10-17",
         "Statement": [{
@@ -170,7 +188,7 @@ def attach_bucket_policy(s3, bucket, dist_arn):
 
 def main():
     if not INSTANCE_INFO.exists():
-        sys.exit("deploy/instance.json nao existe - rode provision.py (backend) primeiro.")
+        sys.exit("deploy/instance.json nao existe - rode provision_backend.py primeiro.")
     ip = json.loads(INSTANCE_INFO.read_text())["ip"]
     backend_dns = f"ec2-{ip.replace('.', '-')}.{REGION}.compute.amazonaws.com"
 
@@ -182,13 +200,14 @@ def main():
 
     ensure_bucket(s3, bucket)
     oac_id = ensure_oac(cf)
+    orp_id = ensure_backend_policy(cf)
 
     found = find_distribution(cf)
     if found:
         dist_id, domain, arn = found
         print(f"Distribuicao '{COMMENT}' ja existe ({dist_id}).")
     else:
-        dist_id, domain, arn = create_distribution(cf, bucket, oac_id, backend_dns)
+        dist_id, domain, arn = create_distribution(cf, bucket, oac_id, backend_dns, orp_id)
 
     attach_bucket_policy(s3, bucket, arn)
     FRONTEND_INFO.write_text(json.dumps(
@@ -196,7 +215,7 @@ def main():
 
     print(f"\nPronto. URL do site (HTTPS): https://{domain}")
     print("A distribuicao leva ~5-15 min pra propagar na 1a vez.")
-    print("Agora rode:  python deploy/frontend_deploy.py  (builda e sobe o dist/)")
+    print("Agora rode:  python deploy/deploy.py frontend")
 
 
 if __name__ == "__main__":
