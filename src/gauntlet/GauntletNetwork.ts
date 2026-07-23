@@ -152,8 +152,15 @@ export default class GauntletNetworkBehaviour extends Behaviour{
             .finally(() => this.openSignalingSocket());
     }
 
+    //wss:// em página HTTPS (produção), ws:// em HTTP (dev): página HTTPS
+    //bloqueia ws:// como mixed content, então o esquema tem que seguir o da página.
+    private wsUrl(path: string): string {
+        const proto = location.protocol === "https:" ? "wss:" : "ws:";
+        return `${proto}//${location.host}${path}`;
+    }
+
     private openSignalingSocket(): void {
-        this.wsSignaling = new WebSocket(`ws://${location.host}/ws/signaling`);
+        this.wsSignaling = new WebSocket(this.wsUrl("/ws/signaling"));
         this.wsSignaling.onopen = ()=>this.wsSignaling.send(JSON.stringify(joinRequest(this.character)));
         this.wsSignaling.onmessage = e=> {
             const msg = JSON.parse(e.data);
@@ -175,7 +182,7 @@ export default class GauntletNetworkBehaviour extends Behaviour{
     }
 
     private connectGame() {
-        this.wsGame = new WebSocket(`ws://${location.host}/ws/game`);
+        this.wsGame = new WebSocket(this.wsUrl("/ws/game"));
         //Sem onopen: nesta fase o client não manda NADA no /ws/game — o server
         //nos reconhece pelo cookie de sessão e fala primeiro (welcome).
         this.wsGame.onmessage = (e)=>{

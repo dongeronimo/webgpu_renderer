@@ -5,7 +5,7 @@
  *    const dmitrySkinTexture = new TexturedSkinnedPhong (
  *      this.device, {
  *          diffuseColor:[1,1,1,1],
- *          diffuseTexture: await loadTexture(this.device, "/textures/soviet+officer+male_basecolor.jpg"),
+ *          diffuseTexture: await loadTexture(this.device, "/textures/soviet_officer_male_basecolor.jpg"),
  *          shininess:16
  *      });
  *    ATENÇÃO: TexturedSkinnedPhong, não TexturedOpaquePhong — personagem é
@@ -161,14 +161,14 @@ export class GauntletWorld extends World implements PrefabFabricator {
         const dmitrySkinTexture = new TexturedSkinnedPhong (
             this.device, {
                 diffuseColor:[1,1,1,1],
-                diffuseTexture: await loadTexture(this.device, "/textures/soviet+officer+male_basecolor.jpg"),
+                diffuseTexture: await loadTexture(this.device, "/textures/soviet_officer_male_basecolor.jpg"),
                 shininess: 16
             }
         );
         const natSkinTexture = new TexturedSkinnedPhong (
             this.device, {
                 diffuseColor:[1,1,1,1],
-                diffuseTexture: await loadTexture(this.device, "/textures/soviet+female+officer_basecolor.jpg"),
+                diffuseTexture: await loadTexture(this.device, "/textures/soviet_female_officer_basecolor.jpg"),
                 shininess: 16
             }
         );
@@ -182,7 +182,7 @@ export class GauntletWorld extends World implements PrefabFabricator {
         const ramirezSkinTexture = new TexturedSkinnedPhong (
             this.device, {
                 diffuseColor:[1,1,1,1],
-                diffuseTexture: await loadTexture(this.device, "/textures/ramirez-military+character+3d+model_basecolor.jpg"),
+                diffuseTexture: await loadTexture(this.device, "/textures/ramirez_military_character_3d_model_basecolor.jpg"),
                 shininess: 16
             }
         )

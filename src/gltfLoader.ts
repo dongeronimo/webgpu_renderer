@@ -40,11 +40,37 @@ export interface GltfLoadResult {
   /** Skins únicas do arquivo, já com os Nodes dos ossos resolvidos. */
   skins: Skin[];
   /** Clips de animação do arquivo (canais por NOME de osso, sem ref a Node).
-   *  Arquivos só-de-animação do Mixamo (sem mesh) entram aqui. */
+   *  Vale pra qualquer esqueleto: arquivos só-de-animação do Mixamo (sem mesh)
+   *  E clips que vêm junto da própria mesh (ex.: o ferrolho da AK no mesmo
+   *  .glb). O casamento canal→osso é por nome, então não é exclusivo humanoide. */
   animations: AnimationClip[];
 }
 
-export async function loadGltf(device: GPUDevice, url: string): Promise<GltfLoadResult> {
+export interface LoadGltfOptions {
+  /**
+   * Política de translation nos clips de animação do arquivo. O mecanismo de
+   * playback casa canal→osso por NOME (AnimatorBehaviour), então o MESMO clip
+   * toca em qualquer instância do mesmo esqueleto sem retargeting real — o
+   * preço disso é que translation nem sempre é segura de reaproveitar.
+   *
+   * `true` (default) = fluxo Mixamo/retargeting: o clip vai tocar num
+   *   esqueleto que pode ter proporções/escala diferentes das de quem capturou
+   *   a animação (Dmitry ≠ xbot ≠ Nat). Só ROTAÇÃO é segura aí, então TODA
+   *   translation é descartada na carga (ver o bloco longo no ponto do strip).
+   *   Comportamento histórico e o certo pros bonecos.
+   *
+   * `false` = o clip toca no PRÓPRIO esqueleto em que foi autorado, no mesmo
+   *   arquivo da mesh (arma cuja animação É pura translation — o ferrolho da
+   *   AK que vai-e-volta). Sem manter a translation a animação simplesmente
+   *   não existe. Use isto ao carregar as armas.
+   */
+  retarget?: boolean;
+}
+
+export async function loadGltf(device: GPUDevice, url: string, options?: LoadGltfOptions): Promise<GltfLoadResult> {
+  //Default true = preserva o comportamento antigo (descarta translation) pra
+  //todo caller que não passa nada — só a arma opta por `retarget: false`.
+  const retarget = options?.retarget ?? true;
   //WebIO resolve .gltf e .glb, buscando buffers/imagens externos
   //relativos à url via fetch. Registrar as extensões Khronos deixa o
   //parser aceitar arquivos que as marcam como obrigatórias (ex.: Blender
@@ -247,25 +273,26 @@ export async function loadGltf(device: GPUDevice, url: string): Promise<GltfLoad
       if (!targetNode || !sampler || (rawPath !== "translation" && rawPath !== "rotation" && rawPath !== "scale")) {
         continue;
       }
-      //Sem retargeting neste engine (ver comentário acima: canais casam por
-      //NOME, tocam em QUALQUER instância do mesmo esqueleto) — isso só é
-      //seguro pra ROTAÇÃO, que independe do tamanho do osso. Translation de
-      //um osso NÃO-raiz é o comprimento do segmento (offset até o pai) —
-      //personagens com proporções diferentes (Dmitry ≠ xbot ≠ Nat, cada um
-      //modelado com seu próprio tamanho de braço/perna) têm valores de bind
-      //diferentes pra ESSA MESMA translation, e sobrescrever com o valor do
-      //clip (proporções de QUEM capturou a animação) estica/encolhe o membro
-      //pra bater com o esqueleto ERRADO — testado: chegava a 2× no antebraço
-      //do Dmitry. E o osso RAIZ (ROOT_BONE_NAME) não é exceção seguro: o
-      //valor do clip também carrega a escala do ARMATURE de QUEM capturou
-      //(aqui, 0.01) — aplicado cru sobre o Armature do Dmitry (0.0292, ~3×
-      //maior) desloca o quadril inteiro pra um lugar errado por um fator
-      //parecido. Sem uma rescala explícita por personagem (que não existe),
-      //nenhuma translation de clip é segura — só rotação. Isso custa o bob
-      //vertical sutil de "peso" no idle (puramente cosmético; a POSIÇÃO de
-      //verdade do personagem vem do server via GameLoop/pivot, nunca do
-      //Hips) — troca aceitável por não distorcer o corpo inteiro.
-      if (rawPath === "translation") {
+      //Descarte de translation — SÓ no modo retargeting (ver LoadGltfOptions).
+      //Sem retargeting real neste engine (canais casam por NOME e tocam em
+      //QUALQUER instância do mesmo esqueleto), reaproveitar um clip num
+      //esqueleto de outras proporções só é seguro pra ROTAÇÃO, que independe
+      //do tamanho do osso. Translation de um osso NÃO-raiz é o comprimento do
+      //segmento (offset até o pai) — personagens com proporções diferentes
+      //(Dmitry ≠ xbot ≠ Nat, cada um com seu tamanho de braço/perna) têm bind
+      //diferente pra ESSA MESMA translation, e sobrescrever com o valor do
+      //clip (proporções de QUEM capturou) estica/encolhe o membro pra bater
+      //com o esqueleto ERRADO — testado: chegava a 2× no antebraço do Dmitry.
+      //E o osso RAIZ (ROOT_BONE_NAME) não é exceção segura: o valor do clip
+      //também carrega a escala do ARMATURE de QUEM capturou (aqui, 0.01) —
+      //aplicado cru sobre o Armature do Dmitry (0.0292, ~3× maior) desloca o
+      //quadril inteiro por um fator parecido. Custa o bob vertical sutil de
+      //"peso" no idle (cosmético; a POSIÇÃO real vem do server via
+      //GameLoop/pivot, nunca do Hips) — troca aceitável pra não distorcer o
+      //corpo. QUANDO retarget=false (arma tocando no PRÓPRIO esqueleto, ex.: o
+      //ferrolho da AK que é pura translation), nada disso vale: o clip nasceu
+      //nesse esqueleto, então a translation é mantida — sem ela não há anim.
+      if (rawPath === "translation" && retarget) {
         continue;
       }
       const input = sampler.getInput();

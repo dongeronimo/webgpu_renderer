@@ -1,0 +1,4 @@
+# segredo (chave privada SSH) e estado local do ambiente - nunca commitar
+lightsail_key.pem
+instance.json
+frontend.json
