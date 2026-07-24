@@ -45,9 +45,9 @@ const LIGHT_CULL_MARGIN = 4;
 //nos passes de mesh (depth24plus) — já provado neste engine como sampleável
 //(o depth do main pass já é lido pelo SmokeVolumePass do gameVolume).
 export const SHADOW_DEPTH_FORMAT: GPUTextureFormat = "depth24plus";
-export const DEFAULT_SHADOW_MAP_SIZE = 512;
+export const DEFAULT_SHADOW_MAP_SIZE = 4096;
 export const SHADOW_MAP_MIN_SIZE = 64;
-export const SHADOW_MAP_MAX_SIZE = 2048;
+export const SHADOW_MAP_MAX_SIZE = 8192;
 //Perspective da sombra do spot: fovY = 2×outerConeAngle (cobre o cone
 //inteiro), near/far fixos — a escala da dungeon é conhecida (~64×64).
 const SPOT_SHADOW_NEAR = 0.5;

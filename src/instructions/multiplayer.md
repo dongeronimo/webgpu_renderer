@@ -201,6 +201,15 @@ milestone futuro, COM medição de bytes/s antes e depois (no espírito dos A/B
 da engine). Toda mensagem tem um campo **`operation`** discriminador
 (renomeado de `t` em 2026-07-13 — legibilidade > bytes enquanto for texto).
 
+Toda mensagem carrega TAMBÉM um **`protocolVersion`** (inteiro). Injetado e
+checado num ponto só de cada lado — `Protocol.encode`/`decode` no server,
+`protocol.ts` no client — então nenhuma mensagem individual precisa lembrar
+dele. Incrementa a cada mudança de protocolo. Regra ASSIMÉTRICA de propósito: o
+SERVER ignora mensagem de versão abaixo da dele (client velho não derruba server
+novo); o CLIENT explode se receber mensagem abaixo da dele (server velho =
+client à frente — falha alto em vez de agir com dado incompatível). Os dois têm
+a versão numa global e sobem juntos (`deploy.py all`).
+
 DOIS canais WS, cada um com a ordem TCP própria (NÃO existe ordem ENTRE eles):
 
 - **`/ws/signaling`** — baixa frequência: join/leave de instância (e futuro
@@ -226,7 +235,7 @@ Client → Server:
 {"operation":"leave"}                            // signaling
 {"operation":"input", "seq":123, ...}            // socket de jogo, a 20 Hz; campos
                                                  // exatos quando o gameplay 1a fechar
-{"operation":"ping", "cs":<performance.now()>}   // socket de jogo
+{"operation":"ping", "t":<performance.now()>}    // socket de jogo (medidor de lag)
 ```
 
 Server → Client:
@@ -244,7 +253,7 @@ Server → Client:
 {"operation":"snap",      "tick":4021, "ents":[{"id":9,"x":1.2,"z":3.4,"yaw":0.5}, ...]}
 {"operation":"event",     ...}                   // semi-estático: doorOpened,
                                                  // keyPickedUp, ... (entra na 1c)
-{"operation":"pong",      "cs":<eco do ping>}    // RTT = now - cs
+{"operation":"pong",      "t":<eco do ping>}     // RTT = now - t
 ```
 
 `mapSync` com uma STRING por linha de tiles, estilo mapa de roguelike — dá
@@ -356,6 +365,90 @@ arena morreu com o pivot pro Gauntlet.)
 
 ---
 
+# Fase 2 — prediction + reconciliação (o pawn local)
+
+Fechei a fase 2 pro MEU pawn. O princípio 3 dizia "interpolação pra todo mundo,
+inclusive a própria nave" — mudou pro dono: o pawn local agora é *autonomous
+proxy* (prediz), não mais *simulated proxy*. O motivo é o próprio aviso honesto
+do princípio 3: num top-down de ANDAR, o delay de RTT+buffer no PRÓPRIO
+movimento é insuportável. Prediction cura. Os REMOTOS continuam fase 1 (ver o
+aviso no fim).
+
+## Predição
+O pawn local roda a MESMA simulação do server — `MineAvatarBehaviour` espelha o
+`GameLoop.stepMovement` 1:1 (aceleração, giro, colisão AABB×grid com o mesmo
+`isFree`/`isFreeAtCells`) — todo frame, respondendo ao input na hora. Continua
+mandando só intenção crua (turn, move) + `seq` a 20 Hz: o princípio 2 intacto, o
+server nunca vê a minha posição. Sim, tem lógica de movimento "duplicada" em
+Java e TS — de propósito: é a única duplicação que a fase 1 jurou evitar, mas
+prediction EXIGE o client simular igual ao server. Divergiu = misprediction.
+
+## Reconciliação: compare-no-ack (não rewind/replay)
+Escolha de projeto, e não é a "livro-texto". O server passou a ecoar no snap um
+`ack` = último `seq` de input que ele processou daquele pawn (o `seq` que a fase
+1 carregava "de graça" finalmente serve pra algo). O client guarda um histórico
+`seq → posição prevista`; no snap do meu pawn:
+
+    erro = posServer(ack) − historico(ack)
+
+Comparado no MESMO seq — então o erro que sobra é só a **misprediction real**
+(previ atravessar uma parede que o server bloqueou etc.), NÃO o atraso de RTT.
+Em espaço aberto a minha predição bate com o server, o erro é ~0, e não há
+correção nenhuma: **zero tremor**. (O jeito ingênuo que eu tinha antes puxava a
+posição rumo ao snap — que está RTT atrasado — a cada 50 ms; a 300 ms de lag
+isso vira cabo-de-guerra com a predição = a tremedeira.)
+
+Por que compare-no-ack e não replay completo: em espaço aberto os dois dão
+IDÊNTICO (predição bate → erro 0). Só divergem numa misprediction que interage
+com geometria ao longo da janela não-confirmada — RARO aqui (o client roda a
+mesma colisão, quase nunca prevê o que o server rejeita). E a minha predição é
+per-frame enquanto o server é passo-fixo de 50 ms; replay EXATO exigiria
+converter a predição pra passo-fixo + interpolar o render (refactor grande) só
+pra ganhar precisão que aqui fica ociosa. Compare-no-ack absorve esse mismatch
+como um offset pequeno e suave. **Quando entrar colisão dinâmica** (mob que
+empurra/bloqueia — aí misprediction vira comum), migro pra fixed-step + replay;
+o histórico por seq + o ack que montei JÁ são a fundação, não jogo nada fora.
+
+## Sim/display: correção que não teleporta
+A posição SIMULADA é a autoritativa (predição e colisão rodam nela; a
+reconciliação corrige ELA na hora). O que vai pra tela é `sim + offset visual`,
+e o offset DECAI a zero (~83 ms). Então a correção, quando existe, some suave em
+vez de dar um pulo. Constante em `MineAvatarBehaviour.CORRECTION_SMOOTH_RATE`.
+
+## State de animação: decidido local
+O `state` (idle/walk/walkBackward) do MEU pawn é decidido na hora, da minha
+própria velocidade prevista (MESMO epsilon do server, `moveStateEpsilon`), não
+do `state` que vem no snap. Antes o pawn deslizava em idle até o state do server
+chegar (RTT atrasado); agora o clip troca no mesmo frame do movimento. O snap do
+meu pawn NÃO aplica mais o state do server — mantém pros remotos.
+
+## Ferramentas de dev: simular e medir o lag
+Localhost tem ~0 ms, então bug de lag não aparece localmente. Duas peças:
+
+- **Simulador** (`netSim.ts`): `?lag=300&jitter=30` na URL adia as mensagens
+  de/pro server (input e snap) por um tempo configurável, PRESERVANDO a ordem
+  (senão o jitter reordena o stream de snap e vira outro bug). Ajustável ao vivo
+  no console (`netSim.down.latency = 200`). Modela SÓ atraso+jitter: o
+  transporte é TCP, perda/reordenação não acontece de verdade, simular seria
+  mentira. Custo zero sem o param.
+- **Medidor** (`netStats.ts` + `NetLag.tsx`, ao lado do FPS): ping/pong no
+  socket de JOGO — não no signaling, é o socket que sofre o lag. O server ecoa o
+  timestamp na HORA (na IO thread, não no tick), então o número é RTT de rede
+  pura. EMA pra suavizar.
+
+## Avisos honestos
+- Os 300 ms que testo são **estresse artificial** (o `?lag`). O server é
+  sa-east-1 (São Paulo); do Brasil o RTT real é uma fração disso. Não otimizo o
+  número falso — meço o real primeiro.
+- O MEU pawn responde instantâneo (predição = zero input-lag percebido). O lag
+  só aparece em ver os OUTROS e nas correções.
+- Os **remotos ainda são fase 1** (dead reckoning + blend rumo ao server) — a
+  300 ms eles overshootam feio. O certo pra eles é o OPOSTO do meu pawn:
+  interpolar no PASSADO (renderizar ~1-2 snaps atrás, lerp entre snaps
+  recebidos), exatamente como o princípio 3 sempre pregou. É o próximo passo.
+
+---
+
 # Explicitamente FORA da fase 1
 
 Prediction/reconciliation, lag compensation, protocolo binário, delta
@@ -373,8 +466,10 @@ reconnect com grace period, persistência, anti-cheat além do clamp.
 - **1c — chaves, portas e loot**: inaugura o canal de EVENTOS semi-estáticos.
 - **1d — procgen + boss**: geração procedural da dungeon (server-side, vira
   dado no `mapSync` como sempre) e o boss da saída.
-- **2 — prediction**: personagem próprio prediz localmente e reconcilia via
-  `seq`.
+- **2 — prediction**: FEITO (pro pawn local) — prediz localmente e reconcilia
+  via `seq`/`ack` (compare-no-ack). Ver a seção "Fase 2". Falta: interpolação
+  dos remotos (renderizar no passado) e, quando houver colisão dinâmica,
+  migrar pro replay.
 - **3 — backlog**: binário (medir!), delta, lag comp, lobby/social.
 
 # Layout

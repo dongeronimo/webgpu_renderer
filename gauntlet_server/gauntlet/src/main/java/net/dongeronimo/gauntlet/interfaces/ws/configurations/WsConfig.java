@@ -12,6 +12,16 @@ import net.dongeronimo.gauntlet.interfaces.ws.SignalingWS;
 @Configuration
 @EnableWebSocket
 public class WsConfig implements WebSocketConfigurer {
+    //Origens permitidas no handshake do WS. Com a página em gauntlet.dongeronimo.net
+    //e o WS em api.dongeronimo.net (etapa 1: WS direto na VM via Caddy, fora do
+    //CloudFront), o handshake é cross-origin — o server valida a Origin aqui.
+    //Prod = subdomínios do dongeronimo.net; dev = qualquer porta do localhost (o
+    //proxy do Vite repassa a Origin real). PATTERNS (não setAllowedOrigins) pra
+    //poder usar curinga.
+    private static final String[] ALLOWED_ORIGINS = {
+        "https://*.dongeronimo.net", "http://localhost:*"
+    };
+
     private final HelloWS helloWS;
     private final SignalingWS signalingWS;
     private final GameWS gameWS;
@@ -23,8 +33,8 @@ public class WsConfig implements WebSocketConfigurer {
     }
     @Override
     public void registerWebSocketHandlers(WebSocketHandlerRegistry registry) {
-        registry.addHandler(helloWS, "/ws").setAllowedOrigins("*");
-        registry.addHandler(signalingWS, "/ws/signaling").setAllowedOrigins("*");
-        registry.addHandler(gameWS, "/ws/game").setAllowedOrigins("*");
+        registry.addHandler(helloWS, "/ws").setAllowedOriginPatterns(ALLOWED_ORIGINS);
+        registry.addHandler(signalingWS, "/ws/signaling").setAllowedOriginPatterns(ALLOWED_ORIGINS);
+        registry.addHandler(gameWS, "/ws/game").setAllowedOriginPatterns(ALLOWED_ORIGINS);
     }
 }

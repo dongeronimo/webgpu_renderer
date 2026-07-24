@@ -5,6 +5,26 @@
   export abstract class Behaviour {
       node!: Node; //preenchido ao anexar
       abstract update(deltaTime: number): void;
+      /**
+       * Análogo do LateUpdate da Unity: roda DEPOIS de todos os update() do
+       * frame, com as posições da árvore inteira já finalizadas. É onde uma
+       * câmera que segue um alvo deve rodar — no update() ela pode ler a
+       * posição do alvo de UM FRAME ATRÁS (a travessia é pré-ordem: um nó
+       * visitado antes do alvo vê o valor velho dele), e isso vira tremor
+       * dependente de frame rate (o offset carrega o deltaTime·v jittery).
+       * No-op por default: quase toda behaviour só precisa do update().
+       */
+      lateUpdate(_deltaTime: number): void {}
+      /**
+       * True só se esta behaviour SOBRESCREVE lateUpdate (não o no-op da base).
+       * O World coleta os nós com lateUpdate durante a passada de update e
+       * revisita só esses depois — em vez de descer a árvore inteira 2x. A
+       * comparação de referência de método pega override em qualquer nível da
+       * cadeia de herança.
+       */
+      get overridesLateUpdate(): boolean {
+          return this.lateUpdate !== Behaviour.prototype.lateUpdate;
+      }
       private alreadyCalledStart:boolean = false;
       /**
        * Dispara start() uma única vez (idempotente via `alreadyCalledStart`).

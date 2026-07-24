@@ -69,12 +69,13 @@ public class ServerMessageSerializationTest {
     @Test
     void snapCarregaSoOQueMudaA20Hz() {
         String json = mapper.writeValueAsString(
-            new Snap(4021, List.of(new SnapEntity(9, 1.2, 3.4, 0.5, 1.0, -1.0, "walk"))));
+            new Snap(4021, List.of(new SnapEntity(9, 1.2, 3.4, 0.5, 1.0, -1.0, "walk", 42))));
         System.out.println("snap: " + json);
         assertTrue(json.contains("\"operation\":\"snap\""));
         assertTrue(json.contains("\"tick\":4021"));
         assertTrue(json.contains("\"id\":9"));
         assertTrue(json.contains("\"state\":\"walk\""));
+        assertTrue(json.contains("\"ack\":42")); //ack do input pra reconciliação do dono
         assertTrue(!json.contains("kind")); //shape enxuto: kind/owner já foram no spawn
     }
 }

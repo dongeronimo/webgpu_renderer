@@ -1,0 +1,7 @@
+api.dongeronimo.net {
+	# TLS automático (Let's Encrypt) + reverse-proxy pro Spring na 8080.
+	# WebSocket passa transparente. O Caddy manda X-Forwarded-Proto: https
+	# certinho (ao contrário do CloudFront), então o redirect pós-login do
+	# Spring sai https quando o /login vier por aqui.
+	reverse_proxy localhost:8080
+}

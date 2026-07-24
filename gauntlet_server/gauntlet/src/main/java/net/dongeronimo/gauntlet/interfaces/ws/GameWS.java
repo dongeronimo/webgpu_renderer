@@ -1,6 +1,7 @@
 package net.dongeronimo.gauntlet.interfaces.ws;
 
 import java.security.Principal;
+import java.util.Map;
 import java.util.Optional;
 
 import org.springframework.stereotype.Component;
@@ -15,6 +16,8 @@ import net.dongeronimo.gauntlet.entities.InstanceEvent;
 import net.dongeronimo.gauntlet.entities.Player;
 import net.dongeronimo.gauntlet.interfaces.transferObjects.ClientMessage;
 import net.dongeronimo.gauntlet.interfaces.transferObjects.Input;
+import net.dongeronimo.gauntlet.interfaces.transferObjects.Ping;
+import net.dongeronimo.gauntlet.interfaces.transferObjects.Protocol;
 import net.dongeronimo.gauntlet.persistence.PlayerPersistence;
 import net.dongeronimo.gauntlet.services.InstanceService;
 import tools.jackson.core.JacksonException;
@@ -70,6 +73,9 @@ public class GameWS extends TextWebSocketHandler {
         //enxerga a sessão já embrulhada no decorator.
         WebSocketSession decorated = new ConcurrentWebSocketSessionDecorator(
             session, SEND_TIME_LIMIT_MS, SEND_BUFFER_SIZE_BYTES);
+        //Guardado pra IO thread poder responder o pong pelo MESMO decorator que
+        //a game thread usa — send concorrente na sessão crua corromperia o frame.
+        session.getAttributes().put("decorated", decorated);
         instance.get().enqueue(new InstanceEvent.PlayerArrived(player, decorated));
         System.out.println("socket de jogo conectado: " + player.getName()
             + " → instância " + instance.get().getId());
@@ -82,17 +88,27 @@ public class GameWS extends TextWebSocketHandler {
         //IO thread NUNCA toca no mundo — só enfileira.
         ClientMessage msg;
         try {
-            msg = objectMapper.readValue(message.getPayload(), ClientMessage.class);
+            msg = Protocol.decode(objectMapper, message.getPayload(), ClientMessage.class);
         } catch (JacksonException e) {
             System.out.println("mensagem malformada no socket de jogo: " + e);
             return;
         }
+        if (msg == null) return; //protocolo abaixo do nosso: ignora (server não regride)
         if (msg instanceof Input(long seq, double turn, double move)) {
             Player player = (Player) session.getAttributes().get("player");
             Instance instance = (Instance) session.getAttributes().get("instance");
             instance.enqueue(new InstanceEvent.PlayerInput(player, turn, move, seq));
+        } else if (msg instanceof Ping(double t)) {
+            //Eco imediato na IO thread (NÃO passa pela game thread): mede rede
+            //pura, sem somar a espera do tick. Sai pelo decorator pra serializar
+            //com os sends da game thread. Devolve o t do CLIENT — o RTT é dele.
+            WebSocketSession decorated = (WebSocketSession) session.getAttributes().get("decorated");
+            if (decorated != null && decorated.isOpen()) {
+                String pong = Protocol.encode(objectMapper,
+                    Map.<String, Object>of("operation", "pong", "t", t));
+                decorated.sendMessage(new TextMessage(pong));
+            }
         }
-        //TODO: ping entra aqui também, no 1a ainda não fechado.
     }
 
     @Override

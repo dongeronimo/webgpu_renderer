@@ -151,6 +151,13 @@ export class GauntletWorld extends World implements PrefabFabricator {
                 shininess:32
             }
         )
+        const dirt = new TexturedOpaquePhong(
+            this.device, {
+                diffuseColor: [1,1,1,1],
+                diffuseTexture: await loadTexture(this.device, "/textures/Dirt_02.png"),
+                shininess: 16
+            }
+        )
         //TexturedSkinnedPhong, não TexturedOpaquePhong: Dmitry/Nat são meshes
         //SKINNED (desenhados pelo GauntletSkinnedRenderPass, grupo 1 =
         //SkinObject) — TexturedOpaquePhong espera ObjectData{model,normalMatrix}
@@ -192,7 +199,7 @@ export class GauntletWorld extends World implements PrefabFabricator {
         registerMaterial("natMaterial", natSkinTexture);
         registerMaterial("abigailSkin", abiSkinTexture);
         registerMaterial("ramirezSkin", ramirezSkinTexture);
-        
+        registerMaterial("dirt", dirt);
         //Câmera fixa quase top-down enquadrando a dungeon INTEIRA: o mapa é
         //32×32 células × tile 2 = 64×64 unidades, centrado na origem pelo
         //serverToWorld do GauntletNetwork (spans ±32 em x/z). A leve inclinação
@@ -243,8 +250,8 @@ export class GauntletWorld extends World implements PrefabFabricator {
         this.rootNode.addChild(light);
         light.lookAt(vec3.create(0, 0, 0));
         const sun = new DirectionalLight();
-        sun.color = [1, 0.97, 0.92];
-        sun.intensity = 1.1;
+        sun.color = [1, 1, 0.7];
+        sun.intensity = 10;
         light.light = sun;
 
         //Padrão dos outros mundos: behaviours enxergam o World.

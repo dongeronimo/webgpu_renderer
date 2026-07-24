@@ -171,6 +171,10 @@ def create_distribution(cf, bucket, oac_id, backend_dns, orp_id):
 
 
 def attach_bucket_policy(s3, bucket, dist_arn):
+    # Libera QUALQUER distribuição CloudFront da conta (gauntlet E vr servem o
+    # mesmo bundle daqui) — MESMA policy do provision_vr.py, então re-rodar
+    # qualquer um dos dois mantém as duas distribuições funcionando.
+    account = dist_arn.split(":")[4]
     policy = {
         "Version": "2008-10-17",
         "Statement": [{
@@ -179,11 +183,12 @@ def attach_bucket_policy(s3, bucket, dist_arn):
             "Principal": {"Service": "cloudfront.amazonaws.com"},
             "Action": "s3:GetObject",
             "Resource": f"arn:aws:s3:::{bucket}/*",
-            "Condition": {"StringEquals": {"AWS:SourceArn": dist_arn}},
+            "Condition": {"ArnLike": {
+                "AWS:SourceArn": f"arn:aws:cloudfront::{account}:distribution/*"}},
         }],
     }
     s3.put_bucket_policy(Bucket=bucket, Policy=json.dumps(policy))
-    print("Policy do bucket aplicada (leitura so pelo CloudFront).")
+    print("Policy do bucket aplicada (leitura só pelas distribuições da conta).")
 
 
 def main():

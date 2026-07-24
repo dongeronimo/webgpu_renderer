@@ -20,6 +20,7 @@ import net.dongeronimo.gauntlet.entities.WorldEntity;
 import net.dongeronimo.gauntlet.interfaces.transferObjects.Despawn;
 import net.dongeronimo.gauntlet.interfaces.transferObjects.EntityDto;
 import net.dongeronimo.gauntlet.interfaces.transferObjects.MapSync;
+import net.dongeronimo.gauntlet.interfaces.transferObjects.Protocol;
 import net.dongeronimo.gauntlet.interfaces.transferObjects.ServerMessage;
 import net.dongeronimo.gauntlet.interfaces.transferObjects.Snap;
 import net.dongeronimo.gauntlet.interfaces.transferObjects.SnapEntity;
@@ -138,7 +139,7 @@ public class GameLoop {
                 case InstanceEvent.PlayerLeft(Player player) ->
                     onPlayerLeft(instance, player);
                 case InstanceEvent.PlayerInput(Player player, double turn, double move, long seq) ->
-                    onPlayerInput(instance, player, turn, move);
+                    onPlayerInput(instance, player, turn, move, seq);
             }
         }
 
@@ -151,11 +152,16 @@ public class GameLoop {
     }
 
     /** Resolve playerId→pawn UMA vez aqui; o passo de movimento só lê o Map. */
-    private void onPlayerInput(Instance instance, Player player, double turn, double move) {
+    private void onPlayerInput(Instance instance, Player player, double turn, double move, long seq) {
         instance.getWorld().values().stream()
             .filter(e -> "player".equals(e.getKind()) && e.getOwner() == player.getId())
             .findFirst()
-            .ifPresent(pawn -> instance.getIntents().put(pawn.getId(), new double[]{turn, move}));
+            .ifPresent(pawn -> {
+                instance.getIntents().put(pawn.getId(), new double[]{turn, move});
+                //guarda o seq pro ack do snap — é o que o client usa pra
+                //reconciliar comparando no MESMO seq (ver SnapEntity.ack).
+                instance.getLastInputSeq().put(pawn.getId(), seq);
+            });
     }
 
     /**
@@ -333,7 +339,8 @@ public class GameLoop {
         List<SnapEntity> ents = instance.getWorld().values().stream()
             .map(e -> {
                 double[] vel = instance.getVelocities().getOrDefault(e.getId(), ZERO_VELOCITY);
-                return new SnapEntity(e.getId(), e.getX(), e.getZ(), e.getYaw(), vel[0], vel[1], e.getState());
+                return new SnapEntity(e.getId(), e.getX(), e.getZ(), e.getYaw(), vel[0], vel[1], e.getState(),
+                    instance.getLastInputSeq().getOrDefault(e.getId(), 0L));
             })
             .toList();
         broadcast(instance, new Snap(instance.getTick(), ents));
@@ -341,14 +348,14 @@ public class GameLoop {
 
     /** Serializa UMA vez e manda a mesma string pra todo mundo. */
     private void broadcast(Instance instance, ServerMessage message) {
-        TextMessage text = new TextMessage(objectMapper.writeValueAsString(message));
+        TextMessage text = new TextMessage(Protocol.encode(objectMapper, message));
         for (WebSocketSession session : instance.getSessions().values()) {
             trySend(session, text);
         }
     }
 
     private void broadcastExcept(Instance instance, long exceptPlayerId, ServerMessage message) {
-        TextMessage text = new TextMessage(objectMapper.writeValueAsString(message));
+        TextMessage text = new TextMessage(Protocol.encode(objectMapper, message));
         for (Map.Entry<Long, WebSocketSession> entry : instance.getSessions().entrySet()) {
             if (entry.getKey() != exceptPlayerId) {
                 trySend(entry.getValue(), text);
@@ -357,7 +364,7 @@ public class GameLoop {
     }
 
     private void send(WebSocketSession session, ServerMessage message) {
-        trySend(session, new TextMessage(objectMapper.writeValueAsString(message)));
+        trySend(session, new TextMessage(Protocol.encode(objectMapper, message)));
     }
 
     /**

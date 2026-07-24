@@ -30,6 +30,10 @@ export interface SnapEntity {
     vx: number;
     vz: number;
     state?: string;
+    //último seq de input processado deste pawn — o DONO usa pra reconciliar
+    //(compara a posição do server com a própria predição NAQUELE seq); os
+    //outros ignoram. Ver MineAvatarBehaviour.reconcile.
+    ack: number;
 }
 
 export interface WelcomeMessage {
@@ -68,6 +72,13 @@ export interface SnapMessage {
     ents: SnapEntity[];
 }
 
+//resposta ao ping do medidor de lag (ver GauntletNetwork.sendPing / netStats):
+//o server ecoa o t que o client mandou; RTT = performance.now() - t.
+export interface PongMessage {
+    operation: "pong";
+    t: number;
+}
+
 //só as mensagens do /ws/game — o /ws/signaling (JoinResponse) é outro canal,
 //outro contrato.
 export type GameServerMessage =
@@ -76,4 +87,5 @@ export type GameServerMessage =
     | StateSyncMessage
     | SpawnMessage
     | DespawnMessage
-    | SnapMessage;
+    | SnapMessage
+    | PongMessage;

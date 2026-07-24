@@ -7,7 +7,8 @@ export async function initWebGPU(): Promise<GpuContext> {
   if (!navigator.gpu) {
     throw new Error("WebGPU is not supported in this browser.");
   }
-
+  const hasHDR = window.matchMedia("(dynamic-range:high)").matches;
+  console.log(`has HDR=${hasHDR}`);
   const adapter = await navigator.gpu.requestAdapter({
     powerPreference: "high-performance",
   });

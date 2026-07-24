@@ -58,6 +58,13 @@ public class Instance {
      * remotos entre snapshots. Só a game thread toca.
      */
     private final Map<Long, double[]> velocities = new HashMap<>();
+    /**
+     * entityId → último seq de input processado (o mais recente drenado antes
+     * do tick). Vai no Snap (SnapEntity.ack) pra reconciliação do client: ele
+     * compara a posição do server com onde a própria predição estava NAQUELE
+     * seq, corrigindo só a misprediction real (não o atraso). Só a game thread toca.
+     */
+    private final Map<Long, Long> lastInputSeq = new HashMap<>();
 
     public Instance(){
 
@@ -159,6 +166,10 @@ public class Instance {
 
     public Map<Long, double[]> getVelocities() {
         return velocities;
+    }
+
+    public Map<Long, Long> getLastInputSeq() {
+        return lastInputSeq;
     }
 
     /** Ids de entidade são por instância. Só a game thread chama. */

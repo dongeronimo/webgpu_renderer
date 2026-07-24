@@ -12,6 +12,7 @@ import type { RootState } from "../../redux/reducers";
 import type { AppDispatch } from "../../redux/store";
 import { Button } from "../generic/Button";
 import { FloatingPanel } from "../generic/FloatingPanel";
+import { backendBase } from "../../appConfig";
 
 export function GauntletLoginPanel() {
     const dispatch = useDispatch<AppDispatch>();
@@ -27,9 +28,14 @@ export function GauntletLoginPanel() {
         setPending(true);
         setError(null);
         try {
-            const resp = await fetch("/login", {
+            //backendBase: prod aponta pro api.dongeronimo.net (direto, fora do
+            //CloudFront); dev é "" (relativo, proxy do Vite). credentials:"include"
+            //pro Set-Cookie da sessão ser aceito no cross-origin. O server agora
+            //devolve 200/401 (não redirect), então resp.ok basta.
+            const resp = await fetch(`${backendBase()}/login`, {
                 method: "POST",
                 body: new URLSearchParams({ username: user, password }),
+                credentials: "include",
             });
             if (!resp.ok) {
                 throw new Error(`HTTP ${resp.status}`);

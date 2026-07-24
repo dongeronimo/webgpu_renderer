@@ -18,6 +18,7 @@ import { WorldSwitch } from "./base/WorldSwitch";
 import { LoadingScreen } from "./base/LoadingScreen";
 import { FloatingPanel } from "./generic/FloatingPanel";
 import { GpuStats } from "./GpuStats";
+import { NetLag } from "./NetLag";
 import { RaycastWorld } from "../raycast/raycastWorld";
 import { RaycastESSWorld } from "../raycastESS/raycastESSWorld";
 import { GameVolumeWorld } from "../gameVolume/gameVolumeWorld";
@@ -148,6 +149,7 @@ export function App({ world }: { world: World }) {
                comparação ENTRE mundos, sobrevive à troca*/}
             <FloatingPanel title="Desempenho" width={200} height="auto" style={{ bottom: 8, left: 8 }}>
                 <GpuStats />
+                <NetLag />
             </FloatingPanel>
             <WorldUi world={world} />
         </>

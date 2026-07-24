@@ -35,6 +35,24 @@ function registerBehaviours() {
   registerBehaviour("terraRotation", TerraRotationBehaviour);
 }
 
+//Instancia o World do nome dado (só o `new`; createRenderPasses/createWorld
+//ficam com quem chama). Exhaustive sobre WorldName — world novo sem case aqui
+//quebra em compile time. Fonte ÚNICA, usada no boot E na troca de mundo.
+function makeWorld(name: WorldName, device: GPUDevice): World {
+  switch (name) {
+    case "solarSystem": return new SolarSystem(device);
+    case "textureStackVolumeRenderSynthetic": return new TextureStackVolumeRendererSynthetic(device);
+    case "textureStackVolumeRenderCT": return new TextureStackVolumeRendererCT(device);
+    case "StarshipDemo": return new StarshipDemoWorld(device);
+    case "raycast": return new RaycastWorld(device);
+    case "raycastESS": return new RaycastESSWorld(device);
+    case "gameVolume": return new GameVolumeWorld(device);
+    case "train": return new TrainWorld(device);
+    case "SkinningDemo": return new SkinningDemoWorld(device);
+    case "gauntlet": return new GauntletWorld(device);
+  }
+}
+
 async function main() {
   const { adapter, device } = await initWebGPU();
   gpuTimer.init(device); //timestamps de GPU por pass (no-op sem a feature)
@@ -62,9 +80,10 @@ async function main() {
 
   let currentWorld:World;
 
-  //Boot no mundo de skinning (etapa atual do trabalho). Tem que casar com o
-  //currentWorld inicial do reducer, senão o loop detecta "troca" no 1º frame.
-  const bootWorld = new SkinningDemoWorld(device);
+  //Boot no world inicial do DOMÍNIO (appConfig/defaultWorld): lê o MESMO valor
+  //que o reducer pôs no currentWorld inicial, senão o loop detectaria "troca"
+  //no 1º frame. Em gauntlet.dongeronimo.net isso abre direto no Gauntlet.
+  const bootWorld = makeWorld(store.getState().base.currentWorld, device);
   //UI React no overlay por cima do canvas; recebe o mundo pra poder ler
   //o scene graph (usePolled). O outro canal, UI→engine, é o store redux.
   //mountUi monta o root React uma única vez; setUiWorld aponta a UI pro
@@ -97,69 +116,9 @@ async function main() {
       currentWorld.destroy();
       //nos cases: criar o mundo novo e aí currentWorld = novo; setUiWorld(novo);
       try{
-         switch(chosenWorld) {
-           case "solarSystem":
-              const solarSystem = new SolarSystem(device);
-              solarSystem.createRenderPasses(canvas, canvasFormat);
-              await solarSystem.createWorld(
-                {aspect:canvas.width/canvas.height, fovy:45, near:0.1, far:100});
-              currentWorld = solarSystem;
-           break;
-           case "textureStackVolumeRenderSynthetic":
-              const textureVRSynthWorld = new TextureStackVolumeRendererSynthetic(device);
-              textureVRSynthWorld.createRenderPasses(canvas,  canvasFormat);
-              await textureVRSynthWorld.createWorld({aspect:canvas.width/canvas.height, fovy:45, near:0.1, far:100});
-              currentWorld = textureVRSynthWorld;
-              break;
-           case "textureStackVolumeRenderCT":
-              const textureVRCTWorld = new TextureStackVolumeRendererCT(device);
-              textureVRCTWorld.createRenderPasses(canvas,  canvasFormat);
-              await textureVRCTWorld.createWorld({aspect:canvas.width/canvas.height, fovy:45, near:0.1, far:100});
-              currentWorld = textureVRCTWorld;
-              break;
-            case "StarshipDemo":
-              const starshipWorld = new StarshipDemoWorld(device);
-              starshipWorld.createRenderPasses(canvas,  canvasFormat);
-              await starshipWorld.createWorld({aspect:canvas.width/canvas.height, fovy:45, near:0.1, far:100});
-              currentWorld = starshipWorld;
-              break;
-            case "raycast":
-              const raycastWorld = new RaycastWorld(device);
-              raycastWorld.createRenderPasses(canvas,  canvasFormat);
-              await raycastWorld.createWorld({aspect:canvas.width/canvas.height, fovy:45, near:0.1, far:100});
-              currentWorld = raycastWorld;
-              break;
-            case "raycastESS":
-              const raycastESSWorld = new RaycastESSWorld(device);
-              raycastESSWorld.createRenderPasses(canvas,  canvasFormat);
-              await raycastESSWorld.createWorld({aspect:canvas.width/canvas.height, fovy:45, near:0.1, far:100});
-              currentWorld = raycastESSWorld;
-              break;
-            case "gameVolume":
-              const gameVolumeWorld = new GameVolumeWorld(device);
-              gameVolumeWorld.createRenderPasses(canvas,  canvasFormat);
-              await gameVolumeWorld.createWorld({aspect:canvas.width/canvas.height, fovy:45, near:0.1, far:100});
-              currentWorld = gameVolumeWorld;
-              break;
-            case "train":
-              const trainWorld = new TrainWorld(device);
-              trainWorld.createRenderPasses(canvas,  canvasFormat);
-              await trainWorld.createWorld({aspect:canvas.width/canvas.height, fovy:45, near:0.1, far:100});
-              currentWorld = trainWorld;
-              break;
-            case "SkinningDemo":
-              const skinningWorld = new SkinningDemoWorld(device);
-              skinningWorld.createRenderPasses(canvas,  canvasFormat);
-              await skinningWorld.createWorld({aspect:canvas.width/canvas.height, fovy:45, near:0.1, far:100});
-              currentWorld = skinningWorld;
-              break;
-            case "gauntlet":
-              const gauntletWorld = new GauntletWorld(device);
-              gauntletWorld.createRenderPasses(canvas,  canvasFormat);
-              await gauntletWorld.createWorld({aspect:canvas.width/canvas.height, fovy:45, near:0.1, far:100});
-              currentWorld = gauntletWorld;
-              break;
-         }
+         currentWorld = makeWorld(chosenWorld, device);
+         currentWorld.createRenderPasses(canvas, canvasFormat);
+         await currentWorld.createWorld({aspect:canvas.width/canvas.height, fovy:45, near:0.1, far:100});
          setUiWorld(currentWorld);
       }catch(e){
          console.error(e);

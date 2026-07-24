@@ -24,6 +24,7 @@ DIST = REPO / "dist"
 KEY_PATH = HERE / "lightsail_key.pem"
 INSTANCE_INFO = HERE / "instance.json"
 FRONTEND_INFO = HERE / "frontend.json"
+VR_INFO = HERE / "vr.json"
 REMOTE_JAR = "/opt/gauntlet/app.jar"
 
 
@@ -39,8 +40,10 @@ def deploy_backend():
     info = json.loads(INSTANCE_INFO.read_text())
     host = f'{info["user"]}@{info["ip"]}'
 
-    # build (mvnw.cmd e .bat -> via 'cmd /c'; testes rodam no dev local)
-    run(["cmd", "/c", "mvnw.cmd", "clean", "package", "-DskipTests"], cwd=BACKEND)
+    # build (mvnw.cmd e .bat -> via 'cmd /c'; testes rodam no dev local).
+    # Caminho COMPLETO do mvnw.cmd: alguns Windows não buscam no cwd
+    # (NoDefaultCurrentDirectoryInExePath), então 'mvnw.cmd' cru não é achado.
+    run(["cmd", "/c", str(BACKEND / "mvnw.cmd"), "clean", "package", "-DskipTests"], cwd=BACKEND)
     jars = [j for j in (BACKEND / "target").glob("*.jar")
             if not j.name.endswith("-plain.jar")]
     if not jars:
@@ -64,9 +67,17 @@ def deploy_frontend():
     if not DIST.exists():
         sys.exit("dist/ nao foi gerado - o build falhou?")
     run(["aws", "s3", "sync", str(DIST), f"s3://{info['bucket']}", "--delete"])
-    run(["aws", "cloudfront", "create-invalidation",
-         "--distribution-id", info["distribution_id"], "--paths", "/*"])
-    print(f"Frontend ok.  https://{info['domain']}")
+
+    # invalida TODAS as distribuições que servem o bundle (gauntlet + vr, que
+    # compartilham o bucket). vr.json só existe se o VR já foi provisionado.
+    dists = [info]
+    if VR_INFO.exists():
+        dists.append(json.loads(VR_INFO.read_text()))
+    for d in dists:
+        run(["aws", "cloudfront", "create-invalidation",
+             "--distribution-id", d["distribution_id"], "--paths", "/*"])
+        print(f"  invalidado: https://{d['domain']}")
+    print("Frontend ok.")
 
 
 TARGETS = {

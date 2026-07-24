@@ -2,6 +2,7 @@ import { vec3 } from "wgpu-matrix";
 import { Behaviour } from "../behaviour";
 import { AnimatorBehaviour } from "../skinning/AnimatorBehaviour";
 import type GauntletNetworkBehaviour from "./GauntletNetwork";
+import type MineAvatarBehaviour from "./MineAvatarBehaviour";
 
 //yaw chega do server em RADIANOS (Math.atan2 java); node.eulerAngles do
 //client quer GRAUS — mesma conversão duplicada em GauntletNetwork.ts e
@@ -47,6 +48,13 @@ export default class NetworkedEntityBehaviour extends Behaviour {
     //uma vez no start(), null se o prefab não tiver uma (ex.: tesouro sem
     //skin). Ver skinning/AnimatorBehaviour.playState.
     private animator: AnimatorBehaviour | null = null;
+    //setado só no pawn local (ver GauntletNetwork.onEntsAdded): é pra quem o
+    //applySnap delega a reconciliação. null nos remotos.
+    private localAvatar: MineAvatarBehaviour | null = null;
+
+    setLocalAvatar(avatar: MineAvatarBehaviour): void {
+        this.localAvatar = avatar;
+    }
 
     constructor(network: GauntletNetworkBehaviour, locallyPredicted: boolean) {
         super();
@@ -68,7 +76,19 @@ export default class NetworkedEntityBehaviour extends Behaviour {
      *  entidade. Puxa posição/yaw uma FRAÇÃO rumo ao valor do server (blend,
      *  não teleporte), guarda a velocidade corrente pro dead reckoning, e
      *  troca a animação se o `state` do server mudou (ex.: "idle"→"walk"). */
-    applySnap(xCells: number, zCells: number, yawRad: number, vx: number, vz: number, state?: string): void {
+    applySnap(xCells: number, zCells: number, yawRad: number, vx: number, vz: number,
+        state: string | undefined, ack: number): void {
+        //MEU pawn: o avatar local reconcilia (compara no ack → corrige só a
+        //misprediction real, suaviza) e decide o próprio state. Nada de blend
+        //nem state do server aqui — eram eles que causavam o puxão/deslize.
+        if (this.locallyPredicted) {
+            //rewind/replay: passa também vx,vz (o replay planta a velocidade do
+            //server como base pra a rampa de aceleração continuar do ponto certo)
+            this.localAvatar?.reconcile(xCells, zCells, yawRad, vx, vz, ack);
+            return;
+        }
+        //Remotos: blend rumo ao server (não tenho o input deles pra prever) +
+        //guarda a velocidade pro dead reckoning entre snaps.
         const targetX = this.network.serverToWorldX(xCells);
         const targetZ = this.network.serverToWorldZ(zCells);
         this.node.position[0] += (targetX - this.node.position[0]) * SNAP_BLEND;

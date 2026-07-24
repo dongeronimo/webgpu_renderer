@@ -12,6 +12,10 @@ import { destroyInstance } from "../prefab";
 import MineAvatarBehaviour from "./MineAvatarBehaviour";
 import NetworkedEntityBehaviour from "./NetworkedEntityBehaviour";
 import CameraFollowBehaviour from "./CameraFollowBehaviour";
+import { netSim } from "./netSim";
+import { netStats } from "./netStats";
+import { PROTOCOL_VERSION, assertProtocol } from "./protocol";
+import { backendBase } from "../appConfig";
 
 
 //yaw chega do server em RADIANOS (Math.atan2 java); node.eulerAngles do
@@ -33,6 +37,9 @@ class InstanceData {
 export default class GauntletNetworkBehaviour extends Behaviour{
     private wsSignaling!: WebSocket;
     private wsGame!: WebSocket;
+    //id do setInterval do ping do medidor de lag (ver connectGame/sendPing);
+    //limpo no dispose pra não vazar timer.
+    private pingTimer: number | undefined;
     //guarda a behaviour, não o Node cru: ela já tem .node (herdado de
     //Behaviour) e é quem sabe aplicar snap/dead reckoning desta entidade —
     //ver NetworkedEntityBehaviour.
@@ -42,9 +49,11 @@ export default class GauntletNetworkBehaviour extends Behaviour{
     //teardown de mapa (estático, nunca destrói) com teardown de entidade
     //(despawn destrói o node individual)
     private entitiesNode!: Node;
-    //seq do input, sobe 1 por envio (20 Hz); server ignora na fase 1, mas
-    //viaja desde já (pré-requisito da prediction da fase 2)
-    private inputSeq = 0;
+    //seq do input, sobe 1 por envio (20 Hz). Começa em 1 (não 0) porque o ack
+    //default do server é 0 = "nenhum input processado"; assim ack=0 nunca casa
+    //com um seq real do histórico e o reconcile pula limpo até o server
+    //processar o primeiro input. Ver MineAvatarBehaviour.reconcile.
+    private inputSeq = 1;
     // Will be defined after i get the welcome response, so we can check it to test if we are fully in the instance
     private instanceData: InstanceData|undefined = undefined;
     //Os ritos de conexão já foram disparados? (o update roda todo frame e a
@@ -64,6 +73,10 @@ export default class GauntletNetworkBehaviour extends Behaviour{
     moveSpeedBackward = 1.5;
     accel = 20.0;
     angularVelocityDegPerSec = 90.0;
+    //abaixo desta velocidade-ao-longo-do-forward (células/s) conta como idle —
+    //MESMO valor do server (GameLoop.Movement.stateEpsilon) pra o state local
+    //(MineAvatarBehaviour) não piscar na fronteira. Fallback se o fetch falhar.
+    moveStateEpsilon = 0.05;
     playerRadius = 0.3;
     //parado gira mais rápido que andando (ver GameLoop.stepMovement) — este
     //é o multiplicador; MineAvatarBehaviour aplica só quando move===0.
@@ -109,9 +122,20 @@ export default class GauntletNetworkBehaviour extends Behaviour{
     //antes do wsGame abrir — não deveria acontecer (a behaviour só existe
     //depois do stateSync, que já implica socket aberto), mas closed/connecting
     //jogariam no send() e derrubariam o socket.
-    sendInput(turn: number, move: number): void {
-        if (this.wsGame?.readyState !== WebSocket.OPEN) return;
-        this.wsGame.send(JSON.stringify({ operation: "input", seq: this.inputSeq++, turn, move }));
+    //Devolve o seq usado (ou undefined se não deu pra enviar) pra o
+    //MineAvatarBehaviour indexar o histórico de predição por seq — é o que a
+    //reconciliação compara contra o ack do server.
+    sendInput(turn: number, move: number): number | undefined {
+        if (this.wsGame?.readyState !== WebSocket.OPEN) return undefined;
+        const seq = this.inputSeq++;
+        const payload = JSON.stringify({ operation: "input", seq, turn, move, protocolVersion: PROTOCOL_VERSION });
+        //Passa pelo netSim: no dev com ?lag, atrasa o envio do input (client→
+        //server) igual à latência real; sem o param, envia na hora. O seq é
+        //alocado no enfileiramento (acima) pra manter a ordem dos inputs.
+        netSim.schedule("up", () => {
+            if (this.wsGame?.readyState === WebSocket.OPEN) this.wsGame.send(payload);
+        });
+        return seq;
     }
 
     /** Delta em CÉLULAS (espaço do server/da predição) → delta em unidades-
@@ -130,7 +154,10 @@ export default class GauntletNetworkBehaviour extends Behaviour{
     //POST /login foi feito pela UI e o fetch/handshakes WS herdam o cookie.
     private connectSignaling(character: string): void {
         this.character = character;
-        fetch(`/api/player-controller-settings/${character}`)
+        //credentials:"include" pro cookie de sessão viajar no cross-origin
+        //(página em gauntlet.dongeronimo.net, backend em api.dongeronimo.net).
+        //Em dev (backendBase "") é same-origin e "include" também manda o cookie.
+        fetch(`${backendBase()}/api/player-controller-settings/${character}`, { credentials: "include" })
             .then(res => {
                 if (!res.ok) throw new Error(`GET /api/player-controller-settings/${character}: HTTP ${res.status}`);
                 return res.json() as Promise<PlayerControllerSettingsDto>;
@@ -140,6 +167,7 @@ export default class GauntletNetworkBehaviour extends Behaviour{
                 this.moveSpeedBackward = settings.moveSpeedBackward;
                 this.accel = settings.accel;
                 this.angularVelocityDegPerSec = settings.angularVelocityDegPerSec;
+                this.moveStateEpsilon = settings.moveStateEpsilon;
                 this.playerRadius = settings.playerRadius;
                 this.idleTurnMultiplier = settings.idleTurnMultiplier;
             })
@@ -152,9 +180,13 @@ export default class GauntletNetworkBehaviour extends Behaviour{
             .finally(() => this.openSignalingSocket());
     }
 
-    //wss:// em página HTTPS (produção), ws:// em HTTP (dev): página HTTPS
-    //bloqueia ws:// como mixed content, então o esquema tem que seguir o da página.
+    //URL do WS. Em prod aponta pro backend DIRETO (backendBase = https://api...
+    //→ wss://api...), fora do CloudFront. Em dev/local, backendBase é "" e cai
+    //no host da página (proxy do Vite), derivando wss:// em https e ws:// em
+    //http (página HTTPS bloqueia ws:// como mixed content).
     private wsUrl(path: string): string {
+        const base = backendBase();
+        if (base) return base.replace(/^http/, "ws") + path; //https→wss, http→ws
         const proto = location.protocol === "https:" ? "wss:" : "ws:";
         return `${proto}//${location.host}${path}`;
     }
@@ -164,6 +196,7 @@ export default class GauntletNetworkBehaviour extends Behaviour{
         this.wsSignaling.onopen = ()=>this.wsSignaling.send(JSON.stringify(joinRequest(this.character)));
         this.wsSignaling.onmessage = e=> {
             const msg = JSON.parse(e.data);
+            assertProtocol(msg); //explode se o server estiver num protocolo abaixo do nosso
             //Tive sucesso em dar join - já tem um slot em uma instância reservado pra mim,
             if(msg.operation === "join" && msg.result ==="ok") {
                 this.connectGame();
@@ -177,16 +210,39 @@ export default class GauntletNetworkBehaviour extends Behaviour{
     }
 
     dispose(): void {
+        if (this.pingTimer !== undefined) clearInterval(this.pingTimer);
         this.wsGame?.close();
         this.wsSignaling?.close();
+    }
+
+    //Ping do medidor de lag (2 Hz, ver connectGame). Carimba t ANTES do netSim
+    //(pra o RTT incluir a ida) e envia pelo mesmo caminho do input; o server
+    //ecoa num pong e dispatch() mede. Passa pelo netSim, então o RTT reflete o
+    //lag real/simulado.
+    private sendPing(): void {
+        if (this.wsGame?.readyState !== WebSocket.OPEN) return;
+        const t = performance.now();
+        netSim.schedule("up", () => {
+            if (this.wsGame?.readyState === WebSocket.OPEN)
+                this.wsGame.send(JSON.stringify({ operation: "ping", t, protocolVersion: PROTOCOL_VERSION }));
+        });
     }
 
     private connectGame() {
         this.wsGame = new WebSocket(this.wsUrl("/ws/game"));
         //Sem onopen: nesta fase o client não manda NADA no /ws/game — o server
         //nos reconhece pelo cookie de sessão e fala primeiro (welcome).
-        this.wsGame.onmessage = (e)=>{
+        //O corpo do handler fica num arrow nomeado (dispatch) pra a entrega
+        //passar pelo netSim (ver a linha de atribuição de onmessage no fim).
+        const dispatch = (e: MessageEvent) => {
             const msg = JSON.parse(e.data) as GameServerMessage;
+            assertProtocol(msg); //explode se o server estiver num protocolo abaixo do nosso
+            if(msg.operation === "pong") {
+                //medidor de lag: não é evento de mundo — mede o RTT e sai. Como
+                //dispatch roda atrás do netSim(down), o RTT inclui o lag simulado.
+                netStats.recordRtt(performance.now() - msg.t);
+                return;
+            }
             if(msg.operation === "welcome") {
                 this.instanceData = new InstanceData(msg.id, msg.instanceId, msg.tickRate);
                 //now that i have the instance data i'm officially in the instance
@@ -229,10 +285,15 @@ export default class GauntletNetworkBehaviour extends Behaviour{
                         console.warn("GauntletNetwork: snap com id desconhecido, ignorando", ent.id);
                         continue;
                     }
-                    behaviour.applySnap(ent.x, ent.z, ent.yaw, ent.vx, ent.vz, ent.state);
+                    behaviour.applySnap(ent.x, ent.z, ent.yaw, ent.vx, ent.vz, ent.state, ent.ack);
                 }
             }
-        } 
+        };
+        //Entrega do state pelo netSim: no dev normal e em produção roda na hora;
+        //com ?lag=NNN na URL, atrasa o handling (server→client) simulando a nuvem.
+        this.wsGame.onmessage = (e) => netSim.schedule("down", () => dispatch(e));
+        //Medidor de lag: ping a 2 Hz enquanto o socket de jogo estiver vivo.
+        this.pingTimer = window.setInterval(() => this.sendPing(), 500);
     }
     
     //Compartilhado por stateSync (foto completa) e spawn (delta): mesmo
@@ -313,14 +374,21 @@ export default class GauntletNetworkBehaviour extends Behaviour{
             //dela, que ficaria redundante com a predição.
             const entityBehaviour = new NetworkedEntityBehaviour(this, isMine);
             pivot.addBehaviour(entityBehaviour);
-            if (isMine) pivot.addBehaviour(new MineAvatarBehaviour(this));
+            if (isMine) {
+                //o avatar local é dono da predição+histórico+reconciliação; o
+                //NetworkedEntityBehaviour delega o snap do MEU pawn pra ele
+                //(reconcile) em vez de dar o blend-rumo-ao-server dos remotos.
+                const mine = new MineAvatarBehaviour(this);
+                pivot.addBehaviour(mine);
+                entityBehaviour.setLocalAvatar(mine);
+            }
             this.entities.set(ent.id, entityBehaviour);
 
             if (isMine) {
                 const cam = this.node.world!.findNode("Camera");
                 //offset fixo atrás/acima do pivot; a behaviour persegue todo
                 //frame — substitui o snap único de antes (só valia no spawn).
-                cam?.addBehaviour(new CameraFollowBehaviour(pivot, vec3.create(0, 10, 6)));
+                cam?.addBehaviour(new CameraFollowBehaviour(pivot, vec3.create(7, 11, 7)));
             }
         }
     }

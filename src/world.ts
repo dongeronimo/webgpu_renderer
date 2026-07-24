@@ -133,6 +133,14 @@ export abstract class World  {
      * matriz dele fechar, então mudanças que uma behaviour faz no próprio
      * nó (ou em descendentes) já valem neste frame. Mexer num ANCESTRAL
      * (que já fechou a matriz) só aparece no frame seguinte.
+     *
+     * DEPOIS da passada de update roda o lateUpdate (análogo da Unity): com
+     * TODAS as posições do frame já fechadas, é onde câmeras que seguem um alvo
+     * rodam sem ler o alvo um frame atrasado. Pra NÃO descer a árvore inteira
+     * de novo, a passada de update COLETA os nós que têm lateUpdate (em
+     * pré-ordem = top-down) e só esses são revisitados; como mover um nó
+     * invalida a worldMatrix cacheada dos descendentes, cada um refaz a matriz
+     * da própria subárvore.
     */
     public update(deltaTime:number) {
         //1º frame do mundo: o createWorld já terminou (o main só chama update
@@ -146,17 +154,41 @@ export abstract class World  {
             store.dispatch(hideLoadingScreen());
         }
         this.scheduledNodesForDestruction = [];
+        //nós com lateUpdate, coletados NESTA passada em pré-ordem (top-down) —
+        //revisitados depois sem varrer a árvore de novo.
+        const lateNodes:Node[] = [];
         const visit = (node:Node) => {
+            let hasLate = false;
             for (const behaviour of node.behaviours) {
                 behaviour.callStartIfHaventYet();
                 behaviour.update(deltaTime);
+                if (behaviour.overridesLateUpdate) hasLate = true;
             }
+            if (hasLate) lateNodes.push(node);
             node.updateWorldMatrix();
             for (const child of node.children) {
                 visit(child);
             }
         };
         visit(this.rootNode);
+        //lateUpdate (câmeras que seguem alvo): roda com a árvore toda já
+        //posicionada, então o follow lê o alvo DESTE frame, não do anterior
+        //(era o que tremia). lateNodes está em ordem top-down, então um
+        //ancestral com lateUpdate já cascateou a matriz antes de um descendente
+        //com lateUpdate rodar. Cada nó refaz a worldMatrix da PRÓPRIA subárvore
+        //(o que ele mover precisa valer nos descendentes no render deste frame).
+        const refreshSubtree = (node:Node) => {
+            node.updateWorldMatrix();
+            for (const child of node.children) {
+                refreshSubtree(child);
+            }
+        };
+        for (const node of lateNodes) {
+            for (const behaviour of node.behaviours) {
+                behaviour.lateUpdate(deltaTime);
+            }
+            refreshSubtree(node);
+        }
         //Agora que a travessia terminou, é seguro mexer na árvore: destrói de
         //fato (immediate=true) os nós agendados durante o frame.
         this.scheduledNodesForDestruction.forEach(n=>this.destroyNode(n, true));

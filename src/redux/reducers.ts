@@ -2,6 +2,7 @@
 //switch e spread — sem toolkit, sem immer.
 import { combineReducers } from "redux";
 import type { CtfPoint } from "../ctf";
+import { defaultWorld } from "../appConfig";
 import { CTF_SET_POINTS, GAUNTLET_CHARACTER_CHOSEN, GAUNTLET_CHOOSING_CHARACTER, GAUNTLET_LOGIN_SUCCEEDED, HELLO_CLICKED, ORBIT_CAMERA, SET_ALPHA_SCALE, SET_CTF_HU_RANGE, SET_DEBUG_VIEW_ACTIVE, SET_GAUNTLET_SHADOW_MAP_SIZE, SET_LOADING, SET_RAYCAST_ESS, SET_RAYCAST_ESS_DEBUG, SET_RAYCAST_FRAMEBUFFER_SCALE, SET_RAYCAST_GRADIENT_MODE, SET_RAYCAST_GRADIENT_SHADING, SWITCH_WORLD, TEXTURE_BASED_CT_SET_NUM_SLICES, ZOOM_CAMERA, type AppAction, type GradientMode, type WorldName } from "./actions";
 
 export interface HelloState {
@@ -113,11 +114,13 @@ const gauntletInitial: GauntletState = {
     loggedIn: false,
     choosingCharacter : false,
     character: null,
-    shadowMapSize: 512,
+    shadowMapSize: 4096,
 };
 
 const baseInitial: BaseState = {
-    currentWorld: "SkinningDemo",
+    //Boot conforme o domínio (gauntlet.dongeronimo.net → gauntlet, etc.) — o
+    //bootWorld do main lê ESTE mesmo valor, então os dois casam. Ver appConfig.
+    currentWorld: defaultWorld(),
     //Começa false: quem liga é o ctor do bootWorld (no main), que roda antes
     //da UI montar — quando o React aparece o valor já reflete o mundo em carga.
     loading: false,

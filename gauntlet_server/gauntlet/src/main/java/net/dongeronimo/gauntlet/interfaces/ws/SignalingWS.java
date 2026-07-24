@@ -13,6 +13,7 @@ import net.dongeronimo.gauntlet.entities.Player;
 import net.dongeronimo.gauntlet.interfaces.transferObjects.ClientMessage;
 import net.dongeronimo.gauntlet.interfaces.transferObjects.JoinRequest;
 import net.dongeronimo.gauntlet.interfaces.transferObjects.JoinResponse;
+import net.dongeronimo.gauntlet.interfaces.transferObjects.Protocol;
 import net.dongeronimo.gauntlet.interfaces.transferObjects.ServerMessage;
 import net.dongeronimo.gauntlet.persistence.PlayerControllerSettingsPersistence;
 import net.dongeronimo.gauntlet.persistence.PlayerPersistence;
@@ -81,13 +82,14 @@ public class SignalingWS extends TextWebSocketHandler {
         // o que ele falou?
         ClientMessage msg;
         try {
-            msg = objectMapper.readValue(message.getPayload(), ClientMessage.class);
-        }        
+            msg = Protocol.decode(objectMapper, message.getPayload(), ClientMessage.class);
+        }
         catch (JacksonException e) {
             System.out.print(e);
             return;
         }
-        
+        if(msg == null) return; //protocolo abaixo do nosso: ignora
+
         if(msg instanceof JoinRequest(String character)) {
             ServerMessage resposta;
             if(session.getAttributes().get("instance") != null){
@@ -115,7 +117,7 @@ public class SignalingWS extends TextWebSocketHandler {
                     resposta = new JoinResponse("alreadyInGame", null);
                 }
             }
-            session.sendMessage(new TextMessage(objectMapper.writeValueAsString(resposta)));
+            session.sendMessage(new TextMessage(Protocol.encode(objectMapper, resposta)));
         }
         //TODO: outras requests aqui
 
