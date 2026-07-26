@@ -13,12 +13,14 @@ import org.springframework.web.socket.WebSocketSession;
 
 import net.dongeronimo.gauntlet.entities.GameMap;
 import net.dongeronimo.gauntlet.entities.Instance;
+import net.dongeronimo.gauntlet.entities.MapCell;
 import net.dongeronimo.gauntlet.entities.InstanceEvent;
 import net.dongeronimo.gauntlet.entities.Player;
 import net.dongeronimo.gauntlet.entities.PlayerControllerSettings;
 import net.dongeronimo.gauntlet.entities.WorldEntity;
 import net.dongeronimo.gauntlet.interfaces.transferObjects.Despawn;
 import net.dongeronimo.gauntlet.interfaces.transferObjects.EntityDto;
+import net.dongeronimo.gauntlet.interfaces.transferObjects.MapCellDto;
 import net.dongeronimo.gauntlet.interfaces.transferObjects.MapSync;
 import net.dongeronimo.gauntlet.interfaces.transferObjects.Protocol;
 import net.dongeronimo.gauntlet.interfaces.transferObjects.ServerMessage;
@@ -297,8 +299,8 @@ public class GameLoop {
      */
     private void onPlayerArrived(Instance instance, Player player, WebSocketSession session) {
         GameMap map = instance.getMap();
-        List<GameMap.Cell> spawns = map.getPlayerSpawns();
-        GameMap.Cell cell = spawns.get(instance.getSessions().size() % spawns.size());
+        List<MapCell> spawns = map.getPlayerSpawns();
+        MapCell cell = spawns.get(instance.getSessions().size() % spawns.size());
 
         //character SEMPRE presente aqui: SignalingWS grava a escolha do
         //JoinRequest em Player antes de qualquer socket de jogo abrir (ver
@@ -313,7 +315,7 @@ public class GameLoop {
         instance.getSessions().put(player.getId(), session);
 
         send(session, new Welcome(pawn.getId(), instance.getId(), TICK_RATE, instance.getTick()));
-        send(session, new MapSync(map.getWidth(), map.getHeight(), map.toRows()));
+        send(session, toMapSync(map));
         send(session, new StateSync(instance.getWorld().values().stream().map(this::toDto).toList()));
 
         //o novato já se recebeu no stateSync; spawn é só pros VETERANOS
@@ -381,5 +383,16 @@ public class GameLoop {
 
     private EntityDto toDto(WorldEntity e) {
         return new EntityDto(e.getId(), e.getKind(), e.getCharacter(), e.getOwner(), e.getX(), e.getZ(), e.getYaw(), e.getState());
+    }
+
+    /** GameMap (domínio) → MapSync (fio), na mesma convenção do toDto das
+     *  entidades: quem monta DTO é o GameLoop, a entidade não conhece o
+     *  protocolo. A ordem das células é a do getCells() (row-major) — é ela
+     *  que faz o índice valer como posição do outro lado. */
+    private MapSync toMapSync(GameMap map) {
+        List<MapCellDto> cells = map.getCells().stream()
+            .map(c -> new MapCellDto(c.category().wire(), c.type().wire(), c.extras()))
+            .toList();
+        return new MapSync(map.getWidth(), map.getHeight(), cells);
     }
 }

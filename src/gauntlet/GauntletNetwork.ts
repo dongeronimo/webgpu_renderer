@@ -6,7 +6,8 @@ import { Node } from "../node";
 import { SpotLight } from "../Light";
 import { store } from "../redux/store";
 import { gauntletShowCharacterSelectionScreen } from "../redux/actions";
-import type { EntityDto, GameServerMessage, MapSyncMessage } from "./dto/ServerMessage";
+import type { EntityDto, GameServerMessage, MapCellDto, MapSyncMessage } from "./dto/ServerMessage";
+import { GauntletMap } from "./gauntletMap";
 import type { PlayerControllerSettingsDto } from "./dto/PlayerControllerSettingsDto";
 import { destroyInstance } from "../prefab";
 import MineAvatarBehaviour from "./MineAvatarBehaviour";
@@ -22,6 +23,27 @@ import { backendBase } from "../appConfig";
 //client quer GRAUS (ver node.ts, quat.fromEuler) — a conversão mora aqui,
 //não do lado do server, que não devia saber nada de convenção de client.
 const RAD_TO_DEG = 180 / Math.PI;
+
+//Tipo de célula (dado, vindo do server) → prefab (arte, local). É a ÚNICA
+//tradução entre os dois mundos: o server não sabe nome de prefab e o client
+//não hardcoda geometria por posição. Tipo que não estiver na tabela cai no
+//fallback e loga UMA vez — buraco no mundo é pior que a arte errada, e um
+//server mais novo (tipo novo) tem que degradar, não quebrar.
+const FLOOR_PREFAB_BY_TYPE: Record<string, string> = { dirtGround: "Floor00" };
+const WALL_PREFAB_BY_TYPE: Record<string, string> = { basicWall: "Wall00" };
+const FALLBACK_FLOOR_PREFAB = "Floor00";
+const FALLBACK_WALL_PREFAB = "Wall00";
+const warnedCellTypes = new Set<string>();
+
+function prefabForCellType(table: Record<string, string>, type: string, fallback: string): string {
+    const prefab = table[type];
+    if (prefab !== undefined) return prefab;
+    if (!warnedCellTypes.has(type)) {
+        warnedCellTypes.add(type); //uma vez por tipo, não uma por célula (seriam centenas)
+        console.warn(`GauntletNetwork: tipo de célula desconhecido "${type}", usando ${fallback}`);
+    }
+    return fallback;
+}
 
 class InstanceData {
     public readonly myId:number;
@@ -89,10 +111,12 @@ export default class GauntletNetworkBehaviour extends Behaviour{
     //confiar que serverToWorld já tem o que precisa
     private mapW = 0;
     private mapH = 0;
-    //linhas cruas do mapSync ('#'=parede) — guardadas pra predição local
-    //(MineAvatarBehaviour) checar colisão com a MESMA regra do server
-    //(isFreeAtCells), em vez de andar cego e só descobrir a parede no snap.
-    private mapRows: string[] = [];
+    //o mapa do mapSync, célula a célula (categoria+tipo+extras) — guardado pra
+    //predição local (MineAvatarBehaviour) checar colisão com a MESMA regra do
+    //server (isFreeAtCells), em vez de andar cego e só descobrir a parede no
+    //snap, e pra quem gera conteúdo local ler os extras da célula. undefined
+    //até o mapSync chegar.
+    private gameMap: GauntletMap | undefined;
     constructor(tileWidth:number, tileHeight:number){
         super();
         this.tileWidth = tileWidth;
@@ -136,6 +160,12 @@ export default class GauntletNetworkBehaviour extends Behaviour{
             if (this.wsGame?.readyState === WebSocket.OPEN) this.wsGame.send(payload);
         });
         return seq;
+    }
+
+    /** O mapa da instância, ou undefined antes do mapSync. Quem gera conteúdo
+     *  a partir da descrição das células (grama e cia.) lê daqui. */
+    get map(): GauntletMap | undefined {
+        return this.gameMap;
     }
 
     /** Delta em CÉLULAS (espaço do server/da predição) → delta em unidades-
@@ -248,7 +278,10 @@ export default class GauntletNetworkBehaviour extends Behaviour{
                 //now that i have the instance data i'm officially in the instance
             }
             if(msg.operation === "mapSync") {
-                // {"operation":"mapSync",  "w":52, "h":30, "rows":["#####...", "#...#..."]}
+                // {"operation":"mapSync", "w":32, "h":32, "cells":[
+                //   {"category":"wall","type":"basicWall"},
+                //   {"category":"passable","type":"dirtGround","extras":{"grassSeed":"8f31c2"}}, ...]}
+                // row-major, w*h células — ver GauntletMap
                 try {
                     this.onMapSync(msg);
                 }
@@ -393,55 +426,63 @@ export default class GauntletNetworkBehaviour extends Behaviour{
         }
     }
 
-    //Constrói o mapa estático a partir da matriz de ocupação (rows[z][x], o
-    //server gerou). Ao final disso eu tenho o mapa comum, igual pros 4 players.
+    //Constrói o mapa estático a partir das células do mapSync (cada uma se
+    //descreve: categoria, tipo e extras). Ao final disso eu tenho o mapa
+    //comum, igual pros 4 players.
     private onMapSync(msg: MapSyncMessage): void {
         this.mapW = msg.w;
         this.mapH = msg.h;
-        this.mapRows = msg.rows;
+        this.gameMap = new GauntletMap(msg.w, msg.h, msg.cells);
         //tudo do mapa pendurado num nó só: debug no getAllNodes e teardown fáceis
         this.mapNode = new Node();
         this.mapNode.name = "Map";
         this.node.addChild(this.mapNode);
-        for(let i=0; i<msg.h; i++) {
-            for(let j=0; j<msg.w; j++){
-                const currentValue = msg.rows[i][j];
-                //Só importam os espaços onde eu posso andar ('.' e 'E' = exit).
-                //Não vou fazer node onde é irrelevante.
-                if(currentValue === '#') continue;
-                //célula (j,i) → tile no CENTRO dela (j+0.5, i+0.5): mesh do
-                //tile tem origem no centro (conferido no glb)
-                this.fabricator.fabricate(
-                    [this.serverToWorldX(j + 0.5), 0, this.serverToWorldZ(i + 0.5)],
-                    "Floor00", this.mapNode
-                );
-                //Paredes: um painel por face aberta→fechada, plantado NA
-                //aresta entre as duas células. O Wall00 corre ao longo de X
-                //com base em y=0 (medido no glb): norte/sul saem na orientação
-                //default, leste/oeste giram 90° em Y.
-                if(this.isWall(msg.rows, j, i - 1)) this.fabricateWall(j + 0.5, i,     false, this.mapNode); //norte
-                if(this.isWall(msg.rows, j, i + 1)) this.fabricateWall(j + 0.5, i + 1, false, this.mapNode); //sul
-                if(this.isWall(msg.rows, j - 1, i)) this.fabricateWall(j,     i + 0.5, true,  this.mapNode); //oeste
-                if(this.isWall(msg.rows, j + 1, i)) this.fabricateWall(j + 1, i + 0.5, true,  this.mapNode); //leste
-            }
-        }
+        this.gameMap.forEachCell((cell, x, z) => {
+            //Só importam os espaços onde eu posso andar — pela CATEGORIA, não
+            //pelo tipo: chão novo que este client não conhece continua sendo
+            //chão. Não vou fazer node onde é irrelevante.
+            if(cell.category !== "passable") return;
+            //célula (x,z) → tile no CENTRO dela (x+0.5, z+0.5): mesh do
+            //tile tem origem no centro (conferido no glb)
+            this.fabricateFloor(cell, x, z);
+            //Paredes: um painel por face aberta→fechada, plantado NA
+            //aresta entre as duas células. O Wall00 corre ao longo de X
+            //com base em y=0 (medido no glb): norte/sul saem na orientação
+            //default, leste/oeste giram 90° em Y.
+            this.fabricateWallIfSolid(x,     z - 1, x + 0.5, z,       false); //norte
+            this.fabricateWallIfSolid(x,     z + 1, x + 0.5, z + 1,   false); //sul
+            this.fabricateWallIfSolid(x - 1, z,     x,       z + 0.5, true);  //oeste
+            this.fabricateWallIfSolid(x + 1, z,     x + 1,   z + 0.5, true);  //leste
+        });
     }
 
-    //Fora do grid conta como parede: o gerador garante borda sólida, isto é
-    //só cinto de segurança pro rows[z][x] não estourar.
-    private isWall(rows: string[], x: number, z: number): boolean {
-        if(z < 0 || z >= rows.length) return true;
-        const row = rows[z];
-        if(x < 0 || x >= row.length) return true;
-        return row[x] === '#';
+    //O chão de UMA célula. É aqui que a decoração local se pendura: a célula
+    //inteira está em mãos, então o que o server compactou nos extras (ex.: a
+    //seed que o gerador de grama expande em N tufos) se lê de cell.extras —
+    //nada disso vem node a node pela rede.
+    private fabricateFloor(cell: MapCellDto, x: number, z: number): void {
+        const prefab = prefabForCellType(FLOOR_PREFAB_BY_TYPE, cell.type, FALLBACK_FLOOR_PREFAB);
+        this.fabricator.fabricate(
+            [this.serverToWorldX(x + 0.5), 0, this.serverToWorldZ(z + 0.5)],
+            prefab, this.mapNode
+        );
     }
 
-    //sx/sz em coordenadas de célula (a aresta fica em coordenada inteira,
-    //o meio dela em .5); alongZ = parede correndo em Z (face leste/oeste)
-    private fabricateWall(sx: number, sz: number, alongZ: boolean, parent: Node): void {
+    //Levanta o painel se a célula VIZINHA (nx,nz) for parede — fora do grid
+    //conta como parede (o gerador garante borda sólida; isto é o cinto de
+    //segurança). Quem escolhe a arte é o tipo DA VIZINHA: é ela que está sendo
+    //desenhada, não a célula de chão de onde estou olhando.
+    //sx/sz em coordenadas de célula (a aresta fica em coordenada inteira, o
+    //meio dela em .5); alongZ = parede correndo em Z (face leste/oeste).
+    private fabricateWallIfSolid(nx: number, nz: number, sx: number, sz: number, alongZ: boolean): void {
+        const neighbour = this.gameMap!.at(nx, nz);
+        if(neighbour !== undefined && neighbour.category !== "wall") return;
+        const prefab = neighbour === undefined
+            ? FALLBACK_WALL_PREFAB //fora do mundo: não há célula pra consultar
+            : prefabForCellType(WALL_PREFAB_BY_TYPE, neighbour.type, FALLBACK_WALL_PREFAB);
         const wall = this.fabricator.fabricate(
             [this.serverToWorldX(sx), 0, this.serverToWorldZ(sz)],
-            "Wall00", parent
+            prefab, this.mapNode
         );
         if(alongZ){
             wall.eulerAngles = vec3.create(0, 90, 0);
@@ -468,13 +509,11 @@ export default class GauntletNetworkBehaviour extends Behaviour{
         return (wz + (this.mapH * this.tileHeight) / 2) / this.tileHeight;
     }
 
-    //Fora do grid conta como parede — mesma regra do isWall (construção do
-    //mapa) e do GameMap.isWalkable do server.
+    //Fora do grid conta como parede — mesma regra da construção do mapa e do
+    //GameMap.isWalkable do server. Antes do mapSync não há mundo: tudo sólido
+    //(nenhuma predição pode andar num mapa que ainda não chegou).
     private isWalkableCell(cellX: number, cellZ: number): boolean {
-        if (cellZ < 0 || cellZ >= this.mapRows.length) return false;
-        const row = this.mapRows[cellZ];
-        if (cellX < 0 || cellX >= row.length) return false;
-        return row[cellX] !== '#';
+        return this.gameMap?.isPassable(cellX, cellZ) ?? false;
     }
 
     /** 4 cantos do corpo em CÉLULAS — mesma checagem AABB×grid do server

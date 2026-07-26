@@ -17,7 +17,9 @@ import tools.jackson.databind.node.ObjectNode;
  * no encode/decode, pra nenhuma mensagem nova esquecer dele.
  */
 public final class Protocol {
-    public static final long VERSION = 1;
+    //2: mapSync deixou de ser matriz de chars e passou a descrever célula a
+    //   célula (categoria + tipo + extras kv) — ver MapSync/MapCellDto.
+    public static final long VERSION = 2;
 
     private Protocol() {}
 

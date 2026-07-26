@@ -12,6 +12,7 @@
 import { mat4, type Mat4 } from "wgpu-matrix";
 import { gpuTimer } from "../gpuTimer";
 import { Node } from "../node";
+import type { Mesh } from "../mesh";
 import type { Renderable } from "../renderable";
 import { RenderPassBit } from "../renderable";
 import {
@@ -165,18 +166,27 @@ export class GauntletMainRenderPass {
         };
         collect(root);
 
-        //Ordena por pipeline e, dentro do pipeline, por material — os ids
-        //são só a ordem de primeira aparição, pra ter chave estável.
+        //Ordena por pipeline, material e MESH — os ids são só a ordem de
+        //primeira aparição, pra ter chave estável. A mesh entrou como 3º
+        //critério pro INSTANCING do draw: só itens VIZINHOS na lista viram um
+        //draw só, então "mesma (pipeline, material, mesh)" precisa ser um
+        //trecho CONTÍGUO. Reordenar é seguro aqui porque este pass é 100%
+        //opaco (nenhum material do Gauntlet declara `blend`) e o teste de
+        //profundidade resolve a visibilidade — num pass COM blending isso
+        //seria corretude, não otimização (ver TransparentSlicesRenderPass).
         const pipelineIds = new Map<GPURenderPipeline, number>();
         const materialIds = new Map<Material, number>();
+        const meshIds = new Map<Mesh, number>();
         for (const item of items) {
             if (!pipelineIds.has(item.pipeline)) pipelineIds.set(item.pipeline, pipelineIds.size);
             if (!materialIds.has(item.material)) materialIds.set(item.material, materialIds.size);
+            if (!meshIds.has(item.renderable.mesh)) meshIds.set(item.renderable.mesh, meshIds.size);
         }
         items.sort(
             (a, b) =>
                 pipelineIds.get(a.pipeline)! - pipelineIds.get(b.pipeline)! ||
-                materialIds.get(a.material)! - materialIds.get(b.material)!,
+                materialIds.get(a.material)! - materialIds.get(b.material)! ||
+                meshIds.get(a.renderable.mesh)! - meshIds.get(b.renderable.mesh)!,
         );
 
         //---- 2. envio ----
@@ -233,23 +243,45 @@ export class GauntletMainRenderPass {
         pass.setBindGroup(BIND_GROUP_FRAME, this.lighting.frameBindGroup);
         pass.setBindGroup(BIND_GROUP_OBJECT, this.objectBindGroup);
 
+        //INSTANCED: varre a lista ordenada em trechos que compartilham
+        //(pipeline, material, mesh) e emite UM draw por trecho. As centenas de
+        //células de parede da dungeon nascem todas do MESMO prefab (que
+        //compartilha mesh e material por referência — ver prefab.ts), então
+        //viram um punhado de draw calls em vez de uma por célula.
+        //
+        //Não precisou de buffer novo, ao contrário do pass skinnado: aqui
+        //cada objeto ocupa 1 slot de tamanho FIXO no grupo 1, escrito na
+        //mesma ordem da lista. Logo os slots de um trecho já são
+        //consecutivos, e instance_index (= firstInstance + i) cai exatamente
+        //no slot certo.
         let lastPipeline: GPURenderPipeline | null = null;
         let lastMaterial: Material | null = null;
-        items.forEach((item, i) => {
-            if (item.pipeline !== lastPipeline) {
-                pass.setPipeline(item.pipeline);
-                lastPipeline = item.pipeline;
+        let start = 0;
+        while (start < items.length) {
+            const first = items[start];
+            const mesh = first.renderable.mesh;
+            let end = start + 1;
+            while (
+                end < items.length &&
+                items[end].pipeline === first.pipeline &&
+                items[end].material === first.material &&
+                items[end].renderable.mesh === mesh
+            ) {
+                end++;
             }
-            if (item.material !== lastMaterial) {
-                pass.setBindGroup(BIND_GROUP_MATERIAL, item.material.getBindGroup());
-                lastMaterial = item.material;
+            if (first.pipeline !== lastPipeline) {
+                pass.setPipeline(first.pipeline);
+                lastPipeline = first.pipeline;
             }
-            const mesh = item.renderable.mesh;
+            if (first.material !== lastMaterial) {
+                pass.setBindGroup(BIND_GROUP_MATERIAL, first.material.getBindGroup());
+                lastMaterial = first.material;
+            }
             pass.setVertexBuffer(0, mesh.vertexBuffer);
             pass.setIndexBuffer(mesh.indexBuffer, mesh.indexFormat);
-            //firstInstance = i → o shader lê models[i], o slot deste draw
-            pass.drawIndexed(mesh.indexCount, 1, 0, 0, i);
-        });
+            pass.drawIndexed(mesh.indexCount, end - start, 0, 0, start);
+            start = end;
+        }
         pass.end();
     }
 

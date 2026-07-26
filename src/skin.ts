@@ -4,8 +4,9 @@
 //
 //O vértice guarda, por influência, um ID de junta (ver SkinnedMesh) que é o
 //ÍNDICE nesta lista `bones` — não um índice de nó do glTF. Então `id` mapeia
-//direto pra `bones[id]` e, no shader, pra a posição `id` no array de matrizes
-//do render pass (é isto que faz `id == slot na matriz`).
+//direto pra `bones[id]` e, no shader, pra a matriz `id` DENTRO do bloco desta
+//instância (o pass dá a base do bloco; ver skinnedRenderPass). É isto que faz
+//`id == slot`, sem tabela de remapeamento.
 //
 //Divisão de posse, igual ao resto dos assets:
 //  - `bones` são Nodes VIVOS da cena (têm transform e worldMatrix que o
@@ -17,12 +18,14 @@
 import { Node } from "./node";
 
 /**
- * Ossos por objeto reservados no render pass. É um teto FIXO e generoso de
- * propósito: o ID da junta indexa direto o array de matrizes no shader
- * (id == slot), sem tabela de remapeamento. Custa memória (200 mat4/objeto),
- * mas troca isso por indexação trivial. xbot usa 65 — sobra folga.
+ * Trava de sanidade, NÃO um orçamento de layout. Os passes reservam
+ * exatamente `jointCount` matrizes por instância (bloco de tamanho variável
+ * num pool plano — ver skinnedRenderPass), então um esqueleto grande custa
+ * memória mas não estoura nada. Este teto só existe pra pegar cedo um
+ * esqueleto absurdo (asset errado, loop de clonagem) em vez de deixar o pool
+ * inchar em silêncio. xbot usa 65.
  */
-export const MAX_BONES = 100;
+export const MAX_BONES = 256;
 
 export class Skin {
   /**
@@ -43,10 +46,11 @@ export class Skin {
 
   constructor(bones: Node[], inverseBindMatrices: Float32Array) {
     if (bones.length > MAX_BONES) {
-      //Estoura o orçamento do shader: o pass só reserva MAX_BONES slots por
-      //objeto, então juntas além disso não teriam matriz. Falha cedo e claro.
+      //Nada no shader quebra com mais que isto (o bloco é do tamanho do
+      //esqueleto), mas um esqueleto deste tamanho é quase certamente bug de
+      //asset/clonagem. Falha cedo em vez de inchar o pool em silêncio.
       throw new Error(
-        `Skin com ${bones.length} ossos excede o limite de ${MAX_BONES} (aumente MAX_BONES e o array no shader de skinning).`,
+        `Skin com ${bones.length} ossos excede a trava de sanidade de ${MAX_BONES} (se for legítimo, aumente MAX_BONES em skin.ts).`,
       );
     }
     this.bones = bones;

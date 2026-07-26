@@ -2,7 +2,8 @@
 //Gauntlet: mesmo Blinn-Phong com linear blend skinning, mas o grupo 0 agora
 //tem N luzes de cada tipo em vez de 1 luz hardcoded tratada como direção —
 //ver gauntletLighting.ts. Só roda no GauntletSkinnedRenderPass — o grupo 1
-//dele é o array de SkinObject (matrizes de osso por objeto).
+//dele é o pool de matrizes de osso (um bloco por objeto, do tamanho do
+//esqueleto dele).
 //
 //Fork EXCLUSIVO do Gauntlet (não compartilhado com o SkinningDemoWorld) pelo
 //mesmo motivo do PhongColorMaterial: o pipeline cache de Material é static
@@ -10,7 +11,6 @@
 //com o dos outros mundos (1 binding).
 import { Material, type PipelineContext } from "../../material";
 import { MeshType, SkinnedMesh } from "../../mesh";
-import { MAX_BONES } from "../../skin";
 
 const SKINNED_PHONG_WGSL = /* wgsl */ `
 struct Frame {
@@ -55,21 +55,20 @@ struct DirectionalLight {
 @group(0) @binding(4) var spotShadowMap: texture_depth_2d_array;
 @group(0) @binding(5) var directionalShadowMap: texture_depth_2d_array;
 @group(0) @binding(6) var shadowSampler: sampler_comparison;
-//Um objeto skinnado = dois arrays de ${MAX_BONES} matrizes:
-//  pose  — matriz de skinning do osso (boneWorld · inverseBind). É a que
-//          deforma o vértice; no bind pose vira identidade.
-//  boneModel — model matrix crua do osso (boneWorld). Não usada no skinning
-//          básico; fica disponível pra attachments/debug de esqueleto.
-struct SkinObject {
-    pose: array<mat4x4f, ${MAX_BONES}>,
-    boneModel: array<mat4x4f, ${MAX_BONES}>,
-};
 struct MaterialParams {
     color: vec4f,
     ambient: vec3f,
     specular: f32, //expoente de brilho (shininess)
 };
-@group(1) @binding(0) var<storage, read> objects: array<SkinObject>;
+//Pool PLANO de matrizes de skinning (pose = boneWorld · inverseBind; no bind
+//pose vira identidade). NÃO é um array de structs de tamanho fixo: cada
+//objeto ocupa exatamente o número de ossos do SEU esqueleto, um bloco atrás
+//do outro. Como os blocos têm tamanhos diferentes, o instance_index não pode
+//ser a base — ele indexa boneOffsets, que diz onde o bloco desta instância
+//começa. Assim um draw instanciado (N cópias do mesmo prefab, cada uma com
+//seu esqueleto) funciona: instance_index anda de 1 em 1, a base não.
+@group(1) @binding(0) var<storage, read> poses: array<mat4x4f>;
+@group(1) @binding(1) var<storage, read> boneOffsets: array<u32>;
 @group(2) @binding(0) var<uniform> material: MaterialParams;
 
 fn sampleShadowPCF(map: texture_depth_2d_array, layer: i32, uv: vec2f, refDepth: f32) -> f32 {
@@ -118,11 +117,12 @@ fn vs(
     //Matriz de skinning combinada: média ponderada das poses das 4 juntas
     //que influenciam o vértice. Pesos vêm normalizados do arquivo (somam ~1).
     //Junta com peso 0 contribui zero, então o id de padding (0) é inofensivo.
+    let base = boneOffsets[instance];
     let m =
-        objects[instance].pose[joints.x] * weights.x +
-        objects[instance].pose[joints.y] * weights.y +
-        objects[instance].pose[joints.z] * weights.z +
-        objects[instance].pose[joints.w] * weights.w;
+        poses[base + joints.x] * weights.x +
+        poses[base + joints.y] * weights.y +
+        poses[base + joints.z] * weights.z +
+        poses[base + joints.w] * weights.w;
 
     let worldPos = m * vec4f(position, 1.0);
     var out: VsOut;

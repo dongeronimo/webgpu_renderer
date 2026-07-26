@@ -5,8 +5,9 @@
 //Point light ainda não lança sombra (cubemap fica pra próxima rodada).
 //
 //Pipelines mínimos, sem fragment shader (WebGPU aceita — é um pass só de
-//depth): o grupo 1 aqui é ENXUTO comparado ao main/skinned pass (só a model
-//matrix, sem normalMatrix; só pose[], sem boneModel — sombra não lê normal).
+//depth): o grupo 1 aqui é ENXUTO comparado ao main pass (só a model matrix,
+//sem normalMatrix — sombra não lê normal). O pool de poses é idêntico ao do
+//skinned pass, mas é OUTRO buffer, por luz.
 //
 //Importante sobre correção: cada luz tem seu PRÓPRIO conjunto de buffers
 //(frame + objeto estático + objeto skinnado), nunca reaproveitados entre
@@ -22,13 +23,16 @@ import { RenderPassBit } from "../renderable";
 import type { Mesh } from "../mesh";
 import { StaticMesh, SkinnedMesh } from "../mesh";
 import type { Skin } from "../skin";
-import { MAX_BONES } from "../skin";
 import { FrustumCuller } from "../frustumCuller";
 import { GauntletLighting, SHADOW_DEPTH_FORMAT } from "./gauntletLighting";
 
 const FLOATS_PER_MAT4 = 16;
 const FLOATS_PER_STATIC_OBJECT = FLOATS_PER_MAT4; //só model — sombra não lê normal
-const FLOATS_PER_SKINNED_OBJECT = MAX_BONES * FLOATS_PER_MAT4; //só pose[] — sem boneModel
+//Pool de poses em matrizes (blocos de tamanho variável, um por objeto
+//skinnado — ver gauntletSkinnedRenderPass). Por LUZ, então começa modesto.
+const INITIAL_POOL_MATRICES = 128;
+//Tabela de offsets, em INSTÂNCIAS.
+const INITIAL_INSTANCES = 32;
 
 //O frustum da luz costuma enquadrar menos coisa que o da câmera (cone de
 //spot, ou a caixa do directional já fitada na cena) — margem menor que a
@@ -45,11 +49,14 @@ fn vs(@location(0) position: vec3f, @builtin(instance_index) instance: u32) -> @
 }
 `;
 
+//Pool PLANO de poses (blocos de tamanho variável, um por esqueleto) + tabela
+//de bases por instância — mesmo esquema, e mesmo motivo, do
+//gauntletSkinnedRenderPass: é o que deixa o draw ser INSTANCIADO.
 const SKINNED_SHADOW_WGSL = /* wgsl */ `
 struct Frame { viewProj: mat4x4f };
-struct SkinObject { pose: array<mat4x4f, ${MAX_BONES}> };
 @group(0) @binding(0) var<uniform> frame: Frame;
-@group(1) @binding(0) var<storage, read> objects: array<SkinObject>;
+@group(1) @binding(0) var<storage, read> poses: array<mat4x4f>;
+@group(1) @binding(1) var<storage, read> boneOffsets: array<u32>;
 @vertex
 fn vs(
     @location(0) position: vec3f,
@@ -57,11 +64,12 @@ fn vs(
     @location(4) weights: vec4f,
     @builtin(instance_index) instance: u32,
 ) -> @builtin(position) vec4f {
+    let base = boneOffsets[instance];
     let m =
-        objects[instance].pose[joints.x] * weights.x +
-        objects[instance].pose[joints.y] * weights.y +
-        objects[instance].pose[joints.z] * weights.z +
-        objects[instance].pose[joints.w] * weights.w;
+        poses[base + joints.x] * weights.x +
+        poses[base + joints.y] * weights.y +
+        poses[base + joints.z] * weights.z +
+        poses[base + joints.w] * weights.w;
     return frame.viewProj * m * vec4f(position, 1.0);
 }
 `;
@@ -73,6 +81,8 @@ interface StaticShadowItem {
 interface SkinnedShadowItem {
     mesh: Mesh;
     skin: Skin;
+    /** Base do bloco deste objeto no pool de poses; vai no firstInstance. */
+    boneOffset: number;
 }
 
 //Recursos de UMA luz (spot[i] ou directional[i]). Nunca compartilhado entre
@@ -85,10 +95,15 @@ interface ShadowSlot {
     staticBuffer: GPUBuffer;
     staticBindGroup: GPUBindGroup;
     staticData: Float32Array<ArrayBuffer>;
-    skinnedCapacity: number;
+    /** Capacidade do pool de poses em MATRIZES, não em objetos. */
+    poseCapacity: number;
     skinnedBuffer: GPUBuffer;
-    skinnedBindGroup: GPUBindGroup;
     skinnedData: Float32Array<ArrayBuffer>;
+    /** Base do bloco de cada instância no pool; capacidade em INSTÂNCIAS. */
+    instanceCapacity: number;
+    offsetBuffer: GPUBuffer;
+    offsetData: Uint32Array<ArrayBuffer>;
+    skinnedBindGroup: GPUBindGroup;
 }
 
 export class GauntletShadowPass {
@@ -119,7 +134,11 @@ export class GauntletShadowPass {
         });
         this.skinnedObjectBindGroupLayout = device.createBindGroupLayout({
             label: "gauntlet shadow objeto skinnado (grupo 1)",
-            entries: [{ binding: 0, visibility: GPUShaderStage.VERTEX, buffer: { type: "read-only-storage" } }],
+            entries: [
+                //0 = poses (pool de mat4), 1 = base do bloco por instância
+                { binding: 0, visibility: GPUShaderStage.VERTEX, buffer: { type: "read-only-storage" } },
+                { binding: 1, visibility: GPUShaderStage.VERTEX, buffer: { type: "read-only-storage" } },
+            ],
         });
 
         const staticModule = device.createShaderModule({ label: "gauntlet shadow static", code: STATIC_SHADOW_WGSL });
@@ -194,7 +213,7 @@ export class GauntletShadowPass {
                     if (node.renderable.passMask & RenderPassBit.Main) {
                         staticItems.push({ mesh: node.renderable.mesh, world: node.worldMatrix });
                     } else if (node.renderable.passMask & RenderPassBit.Skinned && node.skin) {
-                        skinnedItems.push({ mesh: node.renderable.mesh, skin: node.skin });
+                        skinnedItems.push({ mesh: node.renderable.mesh, skin: node.skin, boneOffset: 0 });
                     }
                 }
             }
@@ -203,6 +222,29 @@ export class GauntletShadowPass {
             }
         };
         collect(root);
+
+        //Agrupa por MESH (só existe 1 pipeline por família aqui e nenhum
+        //material, então a mesh é a chave inteira do batch) — instancing só
+        //junta itens VIZINHOS, e a travessia da cena não entrega os iguais
+        //lado a lado. A ordem final tem que sair ANTES da escrita nos
+        //buffers: o índice do item na lista é o instance_index dele.
+        const meshIds = new Map<Mesh, number>();
+        for (const item of staticItems) {
+            if (!meshIds.has(item.mesh)) meshIds.set(item.mesh, meshIds.size);
+        }
+        for (const item of skinnedItems) {
+            if (!meshIds.has(item.mesh)) meshIds.set(item.mesh, meshIds.size);
+        }
+        staticItems.sort((a, b) => meshIds.get(a.mesh)! - meshIds.get(b.mesh)!);
+        skinnedItems.sort((a, b) => meshIds.get(a.mesh)! - meshIds.get(b.mesh)!);
+
+        //Prefix-sum dos jointCount: cada objeto ganha um bloco do tamanho
+        //exato do seu esqueleto.
+        let totalBones = 0;
+        for (const item of skinnedItems) {
+            item.boneOffset = totalBones;
+            totalBones += item.skin.jointCount;
+        }
 
         //---- envio: 1 write por buffer, todos ANTES do render pass deste
         //slot — a leitura na GPU acontece no submit() do frame, então isto
@@ -219,12 +261,21 @@ export class GauntletShadowPass {
             this.device.queue.writeBuffer(slot.staticBuffer, 0, slot.staticData, 0, staticItems.length * FLOATS_PER_STATIC_OBJECT);
         }
 
-        if (skinnedItems.length > slot.skinnedCapacity) {
-            this.growSkinnedSlot(slot, skinnedItems.length);
+        if (totalBones > slot.poseCapacity) {
+            this.growSkinnedSlot(slot, totalBones);
+            this.rebuildSkinnedBindGroup(slot);
         }
-        skinnedItems.forEach((item, i) => this.writeSkinPoseOnly(item.skin, slot.skinnedData, i));
+        if (skinnedItems.length > slot.instanceCapacity) {
+            this.growOffsetSlot(slot, skinnedItems.length);
+            this.rebuildSkinnedBindGroup(slot);
+        }
+        skinnedItems.forEach((item, i) => {
+            slot.offsetData[i] = item.boneOffset;
+            this.writeSkinPoseOnly(item.skin, slot.skinnedData, item.boneOffset);
+        });
         if (skinnedItems.length) {
-            this.device.queue.writeBuffer(slot.skinnedBuffer, 0, slot.skinnedData, 0, skinnedItems.length * FLOATS_PER_SKINNED_OBJECT);
+            this.device.queue.writeBuffer(slot.skinnedBuffer, 0, slot.skinnedData, 0, totalBones * FLOATS_PER_MAT4);
+            this.device.queue.writeBuffer(slot.offsetBuffer, 0, slot.offsetData, 0, skinnedItems.length);
         }
 
         //---- draw ----
@@ -244,33 +295,52 @@ export class GauntletShadowPass {
         if (staticItems.length) {
             pass.setPipeline(this.staticPipeline);
             pass.setBindGroup(1, slot.staticBindGroup);
-            staticItems.forEach((item, i) => {
-                pass.setVertexBuffer(0, item.mesh.vertexBuffer);
-                pass.setIndexBuffer(item.mesh.indexBuffer, item.mesh.indexFormat);
-                pass.drawIndexed(item.mesh.indexCount, 1, 0, 0, i);
-            });
+            //INSTANCED por mesh: 1 slot de model matrix por objeto, escrito na
+            //ordem da lista → os slots de um trecho são consecutivos e
+            //instance_index cai no slot certo, sem buffer extra. É aqui que a
+            //dungeon inteira (centenas de paredes iguais) deixa de custar
+            //centenas de draws POR LUZ.
+            let start = 0;
+            while (start < staticItems.length) {
+                const mesh = staticItems[start].mesh;
+                let end = start + 1;
+                while (end < staticItems.length && staticItems[end].mesh === mesh) {
+                    end++;
+                }
+                pass.setVertexBuffer(0, mesh.vertexBuffer);
+                pass.setIndexBuffer(mesh.indexBuffer, mesh.indexFormat);
+                pass.drawIndexed(mesh.indexCount, end - start, 0, 0, start);
+                start = end;
+            }
         }
         if (skinnedItems.length) {
             pass.setPipeline(this.skinnedPipeline);
             pass.setBindGroup(1, slot.skinnedBindGroup);
-            skinnedItems.forEach((item, i) => {
-                pass.setVertexBuffer(0, item.mesh.vertexBuffer);
-                pass.setIndexBuffer(item.mesh.indexBuffer, item.mesh.indexFormat);
-                pass.drawIndexed(item.mesh.indexCount, 1, 0, 0, i);
-            });
+            //INSTANCED: um draw por trecho contíguo de mesma mesh; cada
+            //instância acha o esqueleto dela por boneOffsets[instance_index].
+            let start = 0;
+            while (start < skinnedItems.length) {
+                const mesh = skinnedItems[start].mesh;
+                let end = start + 1;
+                while (end < skinnedItems.length && skinnedItems[end].mesh === mesh) {
+                    end++;
+                }
+                pass.setVertexBuffer(0, mesh.vertexBuffer);
+                pass.setIndexBuffer(mesh.indexBuffer, mesh.indexFormat);
+                pass.drawIndexed(mesh.indexCount, end - start, 0, 0, start);
+                start = end;
+            }
         }
         pass.end();
     }
 
-    //pose = boneWorld · inverseBind, igual ao skinnedRenderPass — só que sem
-    //gravar boneModel (a sombra não lê normal, então não precisa dele).
-    private writeSkinPoseOnly(skin: Skin, data: Float32Array, i: number): void {
-        const base = i * FLOATS_PER_SKINNED_OBJECT;
-        const n = Math.min(skin.jointCount, MAX_BONES);
-        for (let j = 0; j < n; j++) {
-            const boneWorld = skin.bones[j].worldMatrix;
-            const off = j * FLOATS_PER_MAT4;
-            mat4.multiply(boneWorld, skin.inverseBind(j), data.subarray(base + off, base + off + FLOATS_PER_MAT4));
+    //pose = boneWorld · inverseBind, igual ao skinnedRenderPass — o bloco tem
+    //exatamente jointCount matrizes, a partir de `boneOffset`.
+    private writeSkinPoseOnly(skin: Skin, data: Float32Array, boneOffset: number): void {
+        const base = boneOffset * FLOATS_PER_MAT4;
+        for (let j = 0; j < skin.jointCount; j++) {
+            const off = base + j * FLOATS_PER_MAT4;
+            mat4.multiply(skin.bones[j].worldMatrix, skin.inverseBind(j), data.subarray(off, off + FLOATS_PER_MAT4));
         }
     }
 
@@ -305,16 +375,25 @@ export class GauntletShadowPass {
             entries: [{ binding: 0, resource: { buffer: staticBuffer } }],
         });
 
-        const skinnedCapacity = 4;
+        const poseCapacity = INITIAL_POOL_MATRICES;
         const skinnedBuffer = this.device.createBuffer({
             label: "gauntlet shadow skinned objects",
-            size: skinnedCapacity * FLOATS_PER_SKINNED_OBJECT * 4,
+            size: poseCapacity * FLOATS_PER_MAT4 * 4,
+            usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
+        });
+        const instanceCapacity = INITIAL_INSTANCES;
+        const offsetBuffer = this.device.createBuffer({
+            label: "gauntlet shadow bone offsets",
+            size: instanceCapacity * 4,
             usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
         });
         const skinnedBindGroup = this.device.createBindGroup({
             label: "gauntlet shadow skinned objects",
             layout: this.skinnedObjectBindGroupLayout,
-            entries: [{ binding: 0, resource: { buffer: skinnedBuffer } }],
+            entries: [
+                { binding: 0, resource: { buffer: skinnedBuffer } },
+                { binding: 1, resource: { buffer: offsetBuffer } },
+            ],
         });
 
         return {
@@ -322,8 +401,11 @@ export class GauntletShadowPass {
             frameData: new Float32Array(FLOATS_PER_MAT4),
             staticCapacity, staticBuffer, staticBindGroup,
             staticData: new Float32Array(staticCapacity * FLOATS_PER_STATIC_OBJECT),
-            skinnedCapacity, skinnedBuffer, skinnedBindGroup,
-            skinnedData: new Float32Array(skinnedCapacity * FLOATS_PER_SKINNED_OBJECT),
+            poseCapacity, skinnedBuffer,
+            skinnedData: new Float32Array(poseCapacity * FLOATS_PER_MAT4),
+            instanceCapacity, offsetBuffer,
+            offsetData: new Uint32Array(instanceCapacity),
+            skinnedBindGroup,
         };
     }
 
@@ -345,21 +427,43 @@ export class GauntletShadowPass {
         });
     }
 
-    private growSkinnedSlot(slot: ShadowSlot, minCount: number): void {
-        let capacity = Math.max(slot.skinnedCapacity, 4);
-        while (capacity < minCount) capacity *= 2;
+    /** `minMatrices` é contado em MATRIZES do pool, não em objetos. */
+    private growSkinnedSlot(slot: ShadowSlot, minMatrices: number): void {
+        let capacity = Math.max(slot.poseCapacity, INITIAL_POOL_MATRICES);
+        while (capacity < minMatrices) capacity *= 2;
         slot.skinnedBuffer.destroy();
-        slot.skinnedCapacity = capacity;
-        slot.skinnedData = new Float32Array(capacity * FLOATS_PER_SKINNED_OBJECT);
+        slot.poseCapacity = capacity;
+        slot.skinnedData = new Float32Array(capacity * FLOATS_PER_MAT4);
         slot.skinnedBuffer = this.device.createBuffer({
             label: "gauntlet shadow skinned objects",
-            size: capacity * FLOATS_PER_SKINNED_OBJECT * 4,
+            size: capacity * FLOATS_PER_MAT4 * 4,
             usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
         });
+    }
+
+    /** `minInstances` é contado em INSTÂNCIAS (itens), não em matrizes. */
+    private growOffsetSlot(slot: ShadowSlot, minInstances: number): void {
+        let capacity = Math.max(slot.instanceCapacity, INITIAL_INSTANCES);
+        while (capacity < minInstances) capacity *= 2;
+        slot.offsetBuffer.destroy();
+        slot.instanceCapacity = capacity;
+        slot.offsetData = new Uint32Array(capacity);
+        slot.offsetBuffer = this.device.createBuffer({
+            label: "gauntlet shadow bone offsets",
+            size: capacity * 4,
+            usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
+        });
+    }
+
+    //Os dois buffers dividem o mesmo bind group: recriar um obriga a refazê-lo.
+    private rebuildSkinnedBindGroup(slot: ShadowSlot): void {
         slot.skinnedBindGroup = this.device.createBindGroup({
             label: "gauntlet shadow skinned objects",
             layout: this.skinnedObjectBindGroupLayout,
-            entries: [{ binding: 0, resource: { buffer: slot.skinnedBuffer } }],
+            entries: [
+                { binding: 0, resource: { buffer: slot.skinnedBuffer } },
+                { binding: 1, resource: { buffer: slot.offsetBuffer } },
+            ],
         });
     }
 
@@ -368,6 +472,7 @@ export class GauntletShadowPass {
             slot.frameBuffer.destroy();
             slot.staticBuffer.destroy();
             slot.skinnedBuffer.destroy();
+            slot.offsetBuffer.destroy();
         }
     }
 }

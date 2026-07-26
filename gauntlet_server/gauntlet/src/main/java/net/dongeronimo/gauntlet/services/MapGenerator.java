@@ -6,6 +6,7 @@ import java.util.Random;
 
 import org.springframework.stereotype.Component;
 
+import net.dongeronimo.gauntlet.entities.CellType;
 import net.dongeronimo.gauntlet.entities.GameMap;
 
 /**
@@ -59,11 +60,14 @@ public class MapGenerator {
         }
         //A 1ª tentativa nunca é rejeitada (mapa vazio), então rooms nunca é vazio.
 
-        //2) Cava as salas.
+        //2) Cava as salas. Chão é DIRT_GROUND por ora — quando existir variação
+        //   (grama, água...) é aqui que ela é escolhida, e a "decoração" que não
+        //   muda andabilidade (ex.: seed de grama) entra como extra da célula,
+        //   não como tipo novo.
         for (Room r : rooms) {
             for (int z = r.z(); z < r.z() + r.h(); z++)
                 for (int x = r.x(); x < r.x() + r.w(); x++)
-                    map.set(x, z, GameMap.FLOOR);
+                    map.set(x, z, CellType.DIRT_GROUND);
         }
 
         //3) Corredores em L: cada sala liga na anterior, centro a centro.
@@ -81,19 +85,24 @@ public class MapGenerator {
         }
 
         //4) Spawns dos 4 players: quadradinho 2x2 no centro da 1ª sala
-        //   (ROOM_MIN=4 garante que cabe dentro dela).
+        //   (ROOM_MIN=4 garante que cabe dentro dela). Marcados como EXTRA na
+        //   própria célula — não existe mais lista de spawns paralela à matriz.
         Room first = rooms.getFirst();
+        int spawnIndex = 0;
         for (int dz = 0; dz <= 1; dz++)
             for (int dx = 0; dx <= 1; dx++)
-                map.getPlayerSpawns().add(new GameMap.Cell(first.centerX() + dx, first.centerZ() + dz));
+                map.putExtra(first.centerX() + dx, first.centerZ() + dz,
+                    GameMap.EXTRA_PLAYER_SPAWN, Integer.toString(spawnIndex++));
 
-        //5) EXIT (futura sala do boss) no centro da última sala. No caso
-        //   degenerado de sala única, desloca pra não cair em cima de spawn.
+        //5) Saída (futura sala do boss) no centro da última sala. Extra, não
+        //   tipo de célula: continua sendo chão de terra normal — a saída é
+        //   semântica de gameplay, não material. No caso degenerado de sala
+        //   única, desloca pra não cair em cima de spawn.
         Room last = rooms.getLast();
         if (rooms.size() > 1) {
-            map.set(last.centerX(), last.centerZ(), GameMap.EXIT);
+            map.putExtra(last.centerX(), last.centerZ(), GameMap.EXTRA_EXIT, "true");
         } else {
-            map.set(last.centerX() - 1, last.centerZ() - 1, GameMap.EXIT);
+            map.putExtra(last.centerX() - 1, last.centerZ() - 1, GameMap.EXTRA_EXIT, "true");
         }
         return map;
     }
@@ -101,12 +110,12 @@ public class MapGenerator {
     /** Cava linha horizontal inclusiva entre x1 e x2 (qualquer ordem). */
     private void carveH(GameMap map, int x1, int x2, int z) {
         for (int x = Math.min(x1, x2); x <= Math.max(x1, x2); x++)
-            map.set(x, z, GameMap.FLOOR);
+            map.set(x, z, CellType.DIRT_GROUND);
     }
 
     /** Cava linha vertical inclusiva entre z1 e z2 (qualquer ordem). */
     private void carveV(GameMap map, int z1, int z2, int x) {
         for (int z = Math.min(z1, z2); z <= Math.max(z1, z2); z++)
-            map.set(x, z, GameMap.FLOOR);
+            map.set(x, z, CellType.DIRT_GROUND);
     }
 }

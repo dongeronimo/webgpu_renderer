@@ -245,7 +245,9 @@ Server → Client:
 {"operation":"join", "result":"alreadyInGame"}        // signaling: recusa (result
                                                       // por operação, sem msg "error")
 {"operation":"welcome",   "id":7, "instanceId":3, "tickRate":20, "tick":4000}
-{"operation":"mapSync",   "w":32, "h":32, "rows":["########","#..K...#", ...]}
+{"operation":"mapSync",   "w":32, "h":32, "cells":[{"category":"wall","type":"basicWall"},
+                                          {"category":"passable","type":"dirtGround",
+                                           "extras":{"grassSeed":"8f31c2"}}, ...]}
 {"operation":"stateSync", ...}                   // semi-estático + spawn em massa
                                                  // de tudo que está vivo
 {"operation":"spawn",     "ents":[{"id":9,"kind":"player","owner":9,"x":0,"z":0,"yaw":0}]}
@@ -256,8 +258,25 @@ Server → Client:
 {"operation":"pong",      "t":<eco do ping>}     // RTT = now - t
 ```
 
-`mapSync` com uma STRING por linha de tiles, estilo mapa de roguelike — dá
-pra LER a dungeon no DevTools, que é o motivo inteiro de ficar em texto.
+`mapSync` descreve CADA célula do grid, row-major (`cells[z*w + x]`, sempre
+`w*h` entradas — o índice é a posição, por isso a célula não carrega x/z):
+
+- `category` (`wall`/`passable`): o eixo grosso, o único que colisão, LOS e
+  pathfinding leem. Vai no fio mesmo sendo derivável do tipo no server, pra
+  tipo NOVO continuar colidindo certo num client velho.
+- `type` (`basicWall`/`dirtGround`): o tipo dentro da categoria — é ele que
+  escolhe o prefab no client (tabela em `GauntletNetwork.ts`; desconhecido cai
+  no fallback e loga).
+- `extras` (kv string→string, omitido quando vazio): o resto. É aqui que mora
+  o que não merece virar tipo — `playerSpawn` (índice do spawn), `exit`, e a
+  motivação original: a SEED da grama, uma string que o gerador do client
+  expande em N tufos localmente em vez de a rede mandar node por tufo.
+
+Era uma STRING por linha de tiles, estilo roguelike, legível no DevTools; um
+char por célula não descrevia nada, então todo dado extra virava campo
+paralelo no protocolo (a lista de spawns) ou tipo-de-tile inventado (a saída).
+A leitura a olho sobreviveu fora do fio: `GameMap.toRows()` no server (log e
+surefire) e `GauntletMap.toRows()` no client, com os mesmos símbolos.
 
 Garantia de ordem: o TCP preserva ordem POR SOCKET, e no socket de jogo o
 server SEMPRE manda `welcome → mapSync → stateSync` antes do primeiro `snap`

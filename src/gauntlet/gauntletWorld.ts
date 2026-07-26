@@ -11,7 +11,7 @@
  *    ATENÇÃO: TexturedSkinnedPhong, não TexturedOpaquePhong — personagem é
  *    mesh SKINNED (desenhada pelo GauntletSkinnedRenderPass), e
  *    TexturedOpaquePhong espera o grupo 1 no formato de mesh ESTÁTICA
- *    (ObjectData{model,normalMatrix}), não SkinObject{pose[],boneModel[]}.
+ *    (ObjectData{model,normalMatrix}), não o pool de matrizes de osso.
  *    Usar o material errado não dá erro nenhum — só nunca anima (T-pose
  *    fixo) e "desliza" com a pose crua do osso 0 por cima do buffer errado.
  *    Se for um personagem sem esqueleto/estático, aí sim TexturedOpaquePhong.

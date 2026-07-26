@@ -1,18 +1,17 @@
 import { Material, type PipelineContext } from "../../material";
 import { MeshType, SkinnedMesh } from "../../mesh";
-import { MAX_BONES } from "../../skin";
 
 /**
  * Fusão de SkinnedPhongMaterial (matriz de skinning via joints/weights, grupo
- * 1 = SkinObject) com TexturedOpaquePhong (textura diffuse/specular opcional,
- * grupo 2). Faltava — Dmitry/Nat usavam TexturedOpaquePhong (que só declara
- * position/normal/uv e lê `objects[instance].model` como se o grupo 1 fosse
- * ObjectData{model,normalMatrix}), mas quem os desenha é o
- * GauntletSkinnedRenderPass, cujo grupo 1 é SkinObject{pose[],boneModel[]} —
- * um struct TOTALMENTE diferente no mesmo binding. O shader nunca lia
+ * 1 = pool de poses) com TexturedOpaquePhong (textura diffuse/specular
+ * opcional, grupo 2). Faltava — Dmitry/Nat usavam TexturedOpaquePhong (que só
+ * declara position/normal/uv e lê `objects[instance].model` como se o grupo 1
+ * fosse ObjectData{model,normalMatrix}), mas quem os desenha é o
+ * GauntletSkinnedRenderPass, cujo grupo 1 são as matrizes de OSSO — conteúdo
+ * TOTALMENTE diferente no mesmo binding. O shader nunca lia
  * joints/weights (T-pose sempre, skinning é no-op) e "model"/"normalMatrix"
- * na prática liam pose[0]/pose[1] (a matriz de skinning do OSSO 0) por cima
- * do buffer errado — daí o corpo inteiro (ainda em bind pose) balançando
+ * na prática liam as duas primeiras matrizes de osso por cima do buffer
+ * errado — daí o corpo inteiro (ainda em bind pose) balançando
  * junto com a sutil animação daquele osso. Só existe a variante Skinned
  * (mesmo espírito de SkinnedPhongMaterial.getPipeline) — pra mesh estática
  * com textura, use TexturedOpaquePhong.
@@ -57,13 +56,11 @@ struct DirectionalLight {
 @group(0) @binding(4) var spotShadowMap: texture_depth_2d_array;
 @group(0) @binding(5) var directionalShadowMap: texture_depth_2d_array;
 @group(0) @binding(6) var shadowSampler: sampler_comparison;
-//Grupo 1 = SkinObject (o mesmo layout de SkinnedPhongMaterial — quem desenha
-//isto SEMPRE é o GauntletSkinnedRenderPass), não ObjectData{model,normalMatrix}.
-struct SkinObject {
-    pose: array<mat4x4f, ${MAX_BONES}>,
-    boneModel: array<mat4x4f, ${MAX_BONES}>,
-};
-@group(1) @binding(0) var<storage, read> objects: array<SkinObject>;
+//Grupo 1 = o pool plano de matrizes de skinning + a tabela de bases por
+//instância (mesmo layout de SkinnedPhongMaterial — quem desenha isto SEMPRE é
+//o GauntletSkinnedRenderPass), não ObjectData{model,normalMatrix}.
+@group(1) @binding(0) var<storage, read> poses: array<mat4x4f>;
+@group(1) @binding(1) var<storage, read> boneOffsets: array<u32>;
 struct MaterialParams {
     diffuseColor: vec4f,
     specularColor: vec3f,
@@ -118,11 +115,12 @@ fn vs(
 ) -> VsOut {
     //Matriz de skinning combinada: média ponderada das poses das 4 juntas
     //que influenciam o vértice — mesma conta de SkinnedPhongMaterial.
+    let base = boneOffsets[instance];
     let m =
-        objects[instance].pose[joints.x] * weights.x +
-        objects[instance].pose[joints.y] * weights.y +
-        objects[instance].pose[joints.z] * weights.z +
-        objects[instance].pose[joints.w] * weights.w;
+        poses[base + joints.x] * weights.x +
+        poses[base + joints.y] * weights.y +
+        poses[base + joints.z] * weights.z +
+        poses[base + joints.w] * weights.w;
 
     let worldPos = m * vec4f(position, 1.0);
     var out: VsOut;

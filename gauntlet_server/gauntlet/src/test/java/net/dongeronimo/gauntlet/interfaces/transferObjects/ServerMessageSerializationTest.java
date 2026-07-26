@@ -3,6 +3,7 @@ package net.dongeronimo.gauntlet.interfaces.transferObjects;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.util.List;
+import java.util.Map;
 
 import org.junit.jupiter.api.Test;
 
@@ -46,12 +47,23 @@ public class ServerMessageSerializationTest {
     }
 
     @Test
-    void mapSyncSaiLegivelNoDevTools() {
-        String json = mapper.writeValueAsString(new MapSync(3, 2, List.of("###", "#.#")));
+    void mapSyncDescreveCadaCelula() {
+        String json = mapper.writeValueAsString(new MapSync(2, 1, List.of(
+            new MapCellDto("wall", "basicWall", Map.of()),
+            new MapCellDto("passable", "dirtGround", Map.of("grassSeed", "8f31c2")))));
         System.out.println("mapSync: " + json);
         assertTrue(json.contains("\"operation\":\"mapSync\""));
-        assertTrue(json.contains("\"w\":3"));
-        assertTrue(json.contains("\"rows\":[\"###\",\"#.#\"]"));
+        assertTrue(json.contains("\"w\":2"));
+        //categoria E tipo no fio: a categoria é o que o client usa pra colidir,
+        //inclusive em tipo que ele ainda não conhece
+        assertTrue(json.contains("\"category\":\"wall\""));
+        assertTrue(json.contains("\"type\":\"basicWall\""));
+        assertTrue(json.contains("\"category\":\"passable\""));
+        assertTrue(json.contains("\"type\":\"dirtGround\""));
+        //o extra que motivou o refactor inteiro: um monte de xz de grama
+        //compactado numa string que o gerador do client expande
+        assertTrue(json.contains("\"grassSeed\":\"8f31c2\""));
+        assertTrue(!json.contains("\"extras\":{}")); //extras vazio não engorda o payload
     }
 
     @Test

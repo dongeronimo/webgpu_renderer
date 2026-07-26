@@ -44,11 +44,33 @@ export interface WelcomeMessage {
     tick: number;
 }
 
+//Espelho de CellCategory.java. É o que TODO sistema (colisão, predição local,
+//futuro pathfinding) lê pra decidir se dá pra andar — nunca o tipo. Assim tipo
+//novo vindo de um server mais novo continua colidindo certo neste client.
+export type CellCategory = "wall" | "passable";
+
+//Espelho de MapCellDto.java. Sem x/z: a lista do mapSync é row-major, o índice
+//JÁ é a posição (i = z*w + x) — ver GauntletMap.
+export interface MapCellDto {
+    category: CellCategory;
+    //"basicWall"/"dirtGround" (espelho de CellType.java) — é o tipo que decide
+    //qual prefab instanciar. Fica string (não união fechada) de propósito:
+    //tipo desconhecido cai no fallback do client em vez de virar erro de
+    //compilação toda vez que o server ganha uma variação nova.
+    type: string;
+    //kv livre da célula: o que não merece virar tipo. É por aqui que o server
+    //manda, por exemplo, a SEED que o gerador de grama do client expande em N
+    //tufos localmente, em vez de mandar um node por tufo. Ausente = vazio (o
+    //server omite extras vazio pra não engordar ~1000 células).
+    extras?: Record<string, string>;
+}
+
 export interface MapSyncMessage {
     operation: "mapSync";
     w: number;
     h: number;
-    rows: string[];
+    //w*h células, row-major (cells[z*w + x])
+    cells: MapCellDto[];
 }
 
 export interface StateSyncMessage {

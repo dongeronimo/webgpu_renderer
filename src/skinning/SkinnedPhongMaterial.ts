@@ -1,7 +1,7 @@
 //SkinnedPhongMaterial: mesmo Blinn-Phong do PhongColorMaterial, mas o
 //vértice é deformado por LINEAR BLEND SKINNING antes de iluminar. Só roda no
-//SkinnedRenderPass — o grupo 1 dele é o array de SkinObject (matrizes de
-//osso por objeto), não as model matrices do main pass.
+//SkinnedRenderPass — o grupo 1 dele é o pool de matrizes de osso (um bloco
+//por objeto), não as model matrices do main pass.
 //
 //Segue o molde dos outros materiais (ver material.ts): o TIPO cacheia
 //pipeline/layout em membros static; a INSTÂNCIA tem seu uniform + bind group.
@@ -13,7 +13,6 @@
 //deixaria tudo estourado ou preto aqui.
 import { Material, type PipelineContext } from "../material";
 import { MeshType, SkinnedMesh } from "../mesh";
-import { MAX_BONES } from "../skin";
 
 const SKINNED_PHONG_WGSL = /* wgsl */ `
 struct Frame {
@@ -22,22 +21,19 @@ struct Frame {
     cameraPos: vec4f,
     light0Pos: vec4f, //aqui: DIREÇÃO da luz (tratada normalizada no fs)
 };
-//Um objeto skinnado = dois arrays de ${MAX_BONES} matrizes:
-//  pose  — matriz de skinning do osso (boneWorld · inverseBind). É a que
-//          deforma o vértice; no bind pose vira identidade.
-//  boneModel — model matrix crua do osso (boneWorld). Não usada no skinning
-//          básico; fica disponível pra attachments/debug de esqueleto.
-struct SkinObject {
-    pose: array<mat4x4f, ${MAX_BONES}>,
-    boneModel: array<mat4x4f, ${MAX_BONES}>,
-};
 struct MaterialParams {
     color: vec4f,
     ambient: vec3f,
     specular: f32, //expoente de brilho (shininess)
 };
 @group(0) @binding(0) var<uniform> frame: Frame;
-@group(1) @binding(0) var<storage, read> objects: array<SkinObject>;
+//Pool PLANO de matrizes de skinning (pose = boneWorld · inverseBind; no bind
+//pose vira identidade). Cada objeto ocupa exatamente o número de ossos do SEU
+//esqueleto, um bloco atrás do outro; como os blocos têm tamanhos diferentes,
+//quem diz onde começa o desta instância é boneOffsets[instance_index] — é o
+//que permite draw INSTANCIADO (N cópias, N esqueletos, 1 draw call).
+@group(1) @binding(0) var<storage, read> poses: array<mat4x4f>;
+@group(1) @binding(1) var<storage, read> boneOffsets: array<u32>;
 @group(2) @binding(0) var<uniform> material: MaterialParams;
 
 struct VsOut {
@@ -57,11 +53,12 @@ fn vs(
     //Matriz de skinning combinada: média ponderada das poses das 4 juntas
     //que influenciam o vértice. Pesos vêm normalizados do arquivo (somam ~1).
     //Junta com peso 0 contribui zero, então o id de padding (0) é inofensivo.
+    let base = boneOffsets[instance];
     let m =
-        objects[instance].pose[joints.x] * weights.x +
-        objects[instance].pose[joints.y] * weights.y +
-        objects[instance].pose[joints.z] * weights.z +
-        objects[instance].pose[joints.w] * weights.w;
+        poses[base + joints.x] * weights.x +
+        poses[base + joints.y] * weights.y +
+        poses[base + joints.z] * weights.z +
+        poses[base + joints.w] * weights.w;
 
     let worldPos = m * vec4f(position, 1.0);
     var out: VsOut;

@@ -4,7 +4,9 @@
 //Toda mensagem carrega protocolVersion. O server ignora mensagem de versão
 //abaixo da dele; o client EXPLODE se receber mensagem abaixo da dele (server
 //velho = client à frente — falha alto em vez de agir com dado incompatível).
-export const PROTOCOL_VERSION = 1;
+//2: mapSync deixou de ser matriz de chars e passou a descrever célula a
+//   célula (categoria + tipo + extras kv) — ver dto/ServerMessage.ts.
+export const PROTOCOL_VERSION = 2;
 
 /** Explode se a mensagem recebida vier de um protocolo mais VELHO que o
  *  esperado. Sem o campo (server pré-versionamento) conta como 0 → explode.

@@ -3,24 +3,30 @@
 //mas o grupo 1 é DIFERENTE: em vez de uma model matrix por objeto, é um bloco
 //de matrizes de OSSO por objeto.
 //
-//Por objeto reservamos MAX_BONES (100) slots de PODE e MAX_BONES de boneModel:
-//  pose[j]      = boneWorld_j · inverseBind_j  (a matriz de skinning; no bind
-//                 pose vira identidade). É o que o vértice usa.
-//  boneModel[j] = boneWorld_j                  (model matrix crua do osso;
-//                 disponível pra attachments/debug, não usada no LBS básico).
-//O ID de junta do vértice indexa direto esses arrays (id == slot) — é o que
-//torna a reserva fixa e generosa (200 mat4/objeto = 12.8 KB) o preço de uma
-//indexação sem tabela de remapeamento.
+//O grupo 1 tem DUAS peças:
+//  binding 0 `poses`       — POOL PLANO de matrizes de skinning
+//                            (pose[j] = boneWorld_j · inverseBind_j; no bind
+//                            pose vira identidade). Cada objeto ocupa
+//                            exatamente `skin.jointCount` matrizes, um bloco
+//                            atrás do outro (prefix-sum na CPU).
+//  binding 1 `boneOffsets` — por INSTÂNCIA, onde o bloco dela começa.
+//O shader faz `poses[boneOffsets[instance_index] + jointId]`. A indireção
+//existe porque os blocos têm TAMANHOS DIFERENTES: num draw instanciado o
+//instance_index anda de 1 em 1, então ele não pode ser a base do bloco.
+//Com isso o pass INSTANCIA de verdade — N cópias do mesmo prefab (mesma mesh,
+//mesmo material, esqueletos próprios) saem em 1 draw call. O ID de junta
+//continua indexando direto (id == slot dentro do bloco), e uma grama de 5
+//ossos custa 5 matrizes, não as 200 do teto antigo.
 //
 //Como o buffer de instâncias (as matrizes) vive AQUI no pass, a skin precisa
 //do seu próprio pass — uma mesh skinnada não cabe no grupo de objeto do main.
 import { mat4 } from "wgpu-matrix";
 import { gpuTimer } from "../gpuTimer";
 import { Node } from "../node";
+import type { Mesh } from "../mesh";
 import type { Renderable } from "../renderable";
 import { RenderPassBit } from "../renderable";
 import type { Skin } from "../skin";
-import { MAX_BONES } from "../skin";
 import {
     Material,
     BIND_GROUP_FRAME,
@@ -33,14 +39,19 @@ import { SkinnedPhongMaterial } from "./SkinnedPhongMaterial";
 /** Formato do depth deste pass — exportado pra quem compartilha o alvo. */
 export const DEPTH_FORMAT: GPUTextureFormat = "depth24plus";
 const FLOATS_PER_MAT4 = 16;
-//Por objeto: MAX_BONES matrizes de pose + MAX_BONES de boneModel.
-const FLOATS_PER_OBJECT = 2 * MAX_BONES * FLOATS_PER_MAT4;
+//Capacidade inicial do pool, em MATRIZES (não em objetos): ~4 esqueletos de
+//personagem. Dobra sob demanda.
+const INITIAL_POOL_MATRICES = 256;
+//Capacidade inicial da tabela de offsets, em INSTÂNCIAS.
+const INITIAL_INSTANCES = 64;
 
 interface DrawItem {
     renderable: Renderable;
     material: Material;
     pipeline: GPURenderPipeline;
     skin: Skin;
+    /** Base do bloco deste objeto no pool; vai na tabela boneOffsets[]. */
+    boneOffset: number;
 }
 
 export class SkinnedRenderPass {
@@ -52,12 +63,20 @@ export class SkinnedRenderPass {
     private readonly frameBindGroup: GPUBindGroup;
     private readonly frameData = new Float32Array(2 * FLOATS_PER_MAT4 + 4 + 4);
 
-    //grupo 1: o bufferzão de matrizes de osso, um bloco por objeto. Cresce
-    //quando o mundo cresce; o conteúdo é reescrito todo frame.
-    private objectCapacity = 0;
+    //grupo 1, binding 0: pool plano de matrizes de osso, um bloco de tamanho
+    //variável por objeto. Cresce quando a cena cresce; reescrito todo frame.
+    private boneCapacity = 0;
     private objectBuffer!: GPUBuffer;
-    private objectBindGroup!: GPUBindGroup;
     private objectData!: Float32Array<ArrayBuffer>;
+
+    //grupo 1, binding 1: onde começa o bloco de cada INSTÂNCIA no pool. Sem
+    //isto não dá pra instanciar: instance_index anda de 1 em 1 e os blocos
+    //não têm todos o mesmo tamanho.
+    private instanceCapacity = 0;
+    private offsetBuffer!: GPUBuffer;
+    private offsetData!: Uint32Array<ArrayBuffer>;
+
+    private objectBindGroup!: GPUBindGroup;
 
     //Alvos de render, recriados quando o tamanho do canvas muda.
     private colorTexture: GPUTexture | null = null;
@@ -91,7 +110,9 @@ export class SkinnedRenderPass {
         const objectBindGroupLayout = device.createBindGroupLayout({
             label: "skinned pass objeto (grupo 1)",
             entries: [
+                //0 = poses (pool de mat4), 1 = base do bloco por instância
                 { binding: 0, visibility: GPUShaderStage.VERTEX, buffer: { type: "read-only-storage" } },
+                { binding: 1, visibility: GPUShaderStage.VERTEX, buffer: { type: "read-only-storage" } },
             ],
         });
         this.ctx = {
@@ -113,9 +134,9 @@ export class SkinnedRenderPass {
             entries: [{ binding: 0, resource: { buffer: this.frameBuffer } }],
         });
 
-        //Poucos objetos skinnados por cena, e cada um é pesado (12.8 KB) —
-        //começa pequeno e dobra sob demanda.
-        this.growObjectBuffer(8);
+        this.growPoseBuffer(INITIAL_POOL_MATRICES);
+        this.growOffsetBuffer(INITIAL_INSTANCES);
+        this.rebuildObjectBindGroup();
         this.fallbackMaterial = new SkinnedPhongMaterial(this.device, [1, 0, 1, 1]);
     }
 
@@ -186,6 +207,7 @@ export class SkinnedRenderPass {
                     material,
                     pipeline: material.getPipeline(this.ctx, node.renderable.meshType),
                     skin: node.skin,
+                    boneOffset: 0, //atribuído depois da ordenação
                 });
             }
             for (const child of node.children) {
@@ -194,18 +216,22 @@ export class SkinnedRenderPass {
         };
         collect(root);
 
-        //Ordena por pipeline e depois por material (chave estável = ordem de
-        //primeira aparição), pra trocar estado o mínimo no draw.
+        //Ordena por pipeline, material e MESH (chave estável = ordem de
+        //primeira aparição): os dois primeiros pra trocar estado o mínimo, a
+        //mesh pro instancing (só itens VIZINHOS viram um draw só).
         const pipelineIds = new Map<GPURenderPipeline, number>();
         const materialIds = new Map<Material, number>();
+        const meshIds = new Map<Mesh, number>();
         for (const item of items) {
             if (!pipelineIds.has(item.pipeline)) pipelineIds.set(item.pipeline, pipelineIds.size);
             if (!materialIds.has(item.material)) materialIds.set(item.material, materialIds.size);
+            if (!meshIds.has(item.renderable.mesh)) meshIds.set(item.renderable.mesh, meshIds.size);
         }
         items.sort(
             (a, b) =>
                 pipelineIds.get(a.pipeline)! - pipelineIds.get(b.pipeline)! ||
-                materialIds.get(a.material)! - materialIds.get(b.material)!,
+                materialIds.get(a.material)! - materialIds.get(b.material)! ||
+                meshIds.get(a.renderable.mesh)! - meshIds.get(b.renderable.mesh)!,
         );
 
         //---- 2. envio ----
@@ -227,11 +253,25 @@ export class SkinnedRenderPass {
             items.length = 0;
         }
 
-        if (items.length > this.objectCapacity) {
-            this.growObjectBuffer(items.length);
+        //Blocos de tamanho VARIÁVEL: a base de cada objeto é a soma dos
+        //jointCount dos anteriores (prefix-sum), na ordem já ordenada — a
+        //mesma em que os draws saem.
+        let totalBones = 0;
+        for (const item of items) {
+            item.boneOffset = totalBones;
+            totalBones += item.skin.jointCount;
+        }
+        if (totalBones > this.boneCapacity) {
+            this.growPoseBuffer(totalBones);
+            this.rebuildObjectBindGroup();
+        }
+        if (items.length > this.instanceCapacity) {
+            this.growOffsetBuffer(items.length);
+            this.rebuildObjectBindGroup();
         }
         items.forEach((item, i) => {
-            this.writeSkin(item.skin, i);
+            this.offsetData[i] = item.boneOffset;
+            this.writeSkin(item.skin, item.boneOffset);
         });
         if (items.length > 0) {
             this.device.queue.writeBuffer(
@@ -239,8 +279,9 @@ export class SkinnedRenderPass {
                 0,
                 this.objectData,
                 0,
-                items.length * FLOATS_PER_OBJECT,
+                totalBones * FLOATS_PER_MAT4,
             );
+            this.device.queue.writeBuffer(this.offsetBuffer, 0, this.offsetData, 0, items.length);
         }
 
         //---- 3. draw, na mesma ordem do envio ----
@@ -265,71 +306,105 @@ export class SkinnedRenderPass {
         pass.setBindGroup(BIND_GROUP_FRAME, this.frameBindGroup);
         pass.setBindGroup(BIND_GROUP_OBJECT, this.objectBindGroup);
 
+        //INSTANCED: um draw por trecho contíguo de mesmo (pipeline, material,
+        //mesh) — ver o cabeçalho do arquivo.
         let lastPipeline: GPURenderPipeline | null = null;
         let lastMaterial: Material | null = null;
-        items.forEach((item, i) => {
-            if (item.pipeline !== lastPipeline) {
-                pass.setPipeline(item.pipeline);
-                lastPipeline = item.pipeline;
+        let start = 0;
+        while (start < items.length) {
+            const first = items[start];
+            const mesh = first.renderable.mesh;
+            let end = start + 1;
+            while (
+                end < items.length &&
+                items[end].pipeline === first.pipeline &&
+                items[end].material === first.material &&
+                items[end].renderable.mesh === mesh
+            ) {
+                end++;
             }
-            if (item.material !== lastMaterial) {
-                pass.setBindGroup(BIND_GROUP_MATERIAL, item.material.getBindGroup());
-                lastMaterial = item.material;
+            if (first.pipeline !== lastPipeline) {
+                pass.setPipeline(first.pipeline);
+                lastPipeline = first.pipeline;
             }
-            const mesh = item.renderable.mesh;
+            if (first.material !== lastMaterial) {
+                pass.setBindGroup(BIND_GROUP_MATERIAL, first.material.getBindGroup());
+                lastMaterial = first.material;
+            }
             pass.setVertexBuffer(0, mesh.vertexBuffer);
             pass.setIndexBuffer(mesh.indexBuffer, mesh.indexFormat);
-            //firstInstance = i → o shader lê objects[i], o bloco deste draw
-            pass.drawIndexed(mesh.indexCount, 1, 0, 0, i);
-        });
+            //firstInstance = índice do 1º item do trecho → instance_index anda
+            //start..end-1, a faixa deles em boneOffsets[].
+            pass.drawIndexed(mesh.indexCount, end - start, 0, 0, start);
+            start = end;
+        }
         pass.end();
     }
 
-    //Preenche o bloco do objeto `i`: por osso, pose = boneWorld · inverseBind
-    //e boneModel = boneWorld. Slots além do jointCount ficam com o que estava
-    //(lixo zerado ou de um objeto anterior) — inofensivo, já que só juntas
-    //com peso > 0 são lidas, e essas estão todas dentro do jointCount.
-    private writeSkin(skin: Skin, i: number): void {
-        const poseBase = i * FLOATS_PER_OBJECT;
-        const modelBase = poseBase + MAX_BONES * FLOATS_PER_MAT4;
-        const n = Math.min(skin.jointCount, MAX_BONES);
-        for (let j = 0; j < n; j++) {
+    //Preenche o bloco deste objeto, `skin.jointCount` matrizes a partir de
+    //`boneOffset`: pose[j] = boneWorld_j · inverseBind_j. Escreve só o que o
+    //bloco cobre — o que vem depois pertence ao PRÓXIMO objeto.
+    private writeSkin(skin: Skin, boneOffset: number): void {
+        const base = boneOffset * FLOATS_PER_MAT4;
+        for (let j = 0; j < skin.jointCount; j++) {
             //worldMatrix é o cache que o World.update deste frame já fechou.
-            const boneWorld = skin.bones[j].worldMatrix;
-            const off = j * FLOATS_PER_MAT4;
-            this.objectData.set(boneWorld, modelBase + off);
+            const off = base + j * FLOATS_PER_MAT4;
             //pose escrita direto no destino via subarray (sem alocar Mat4).
             mat4.multiply(
-                boneWorld,
+                skin.bones[j].worldMatrix,
                 skin.inverseBind(j),
-                this.objectData.subarray(poseBase + off, poseBase + off + FLOATS_PER_MAT4),
+                this.objectData.subarray(off, off + FLOATS_PER_MAT4),
             );
         }
     }
 
-    private growObjectBuffer(minObjects: number): void {
-        let capacity = Math.max(this.objectCapacity, 8);
-        while (capacity < minObjects) {
+    /** `minMatrices` é contado em MATRIZES do pool, não em objetos. */
+    private growPoseBuffer(minMatrices: number): void {
+        let capacity = Math.max(this.boneCapacity, INITIAL_POOL_MATRICES);
+        while (capacity < minMatrices) {
             capacity *= 2;
         }
         this.objectBuffer?.destroy();
-        this.objectCapacity = capacity;
-        this.objectData = new Float32Array(capacity * FLOATS_PER_OBJECT);
+        this.boneCapacity = capacity;
+        this.objectData = new Float32Array(capacity * FLOATS_PER_MAT4);
         this.objectBuffer = this.device.createBuffer({
             label: "skinned pass bone matrices",
-            size: capacity * FLOATS_PER_OBJECT * 4,
+            size: capacity * FLOATS_PER_MAT4 * 4,
             usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
         });
+    }
+
+    private growOffsetBuffer(minInstances: number): void {
+        let capacity = Math.max(this.instanceCapacity, INITIAL_INSTANCES);
+        while (capacity < minInstances) {
+            capacity *= 2;
+        }
+        this.offsetBuffer?.destroy();
+        this.instanceCapacity = capacity;
+        this.offsetData = new Uint32Array(capacity);
+        this.offsetBuffer = this.device.createBuffer({
+            label: "skinned pass bone offsets",
+            size: capacity * 4,
+            usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
+        });
+    }
+
+    //Os dois buffers moram no mesmo bind group: recriar um obriga a refazê-lo.
+    private rebuildObjectBindGroup(): void {
         this.objectBindGroup = this.device.createBindGroup({
             label: "skinned pass objeto",
             layout: this.ctx.objectBindGroupLayout,
-            entries: [{ binding: 0, resource: { buffer: this.objectBuffer } }],
+            entries: [
+                { binding: 0, resource: { buffer: this.objectBuffer } },
+                { binding: 1, resource: { buffer: this.offsetBuffer } },
+            ],
         });
     }
 
     destroy(): void {
         this.frameBuffer.destroy();
         this.objectBuffer.destroy();
+        this.offsetBuffer.destroy();
         this.colorTexture?.destroy();
         this.depthTexture?.destroy();
         this.colorTexture = null;
