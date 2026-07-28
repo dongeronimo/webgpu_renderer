@@ -1,58 +1,16 @@
-import { Material, type PipelineContext } from "../../material";
+import { Material, PipelineContext } from "../../material";
 import { MeshType, SkinnedMesh } from "../../mesh";
-
-/**
- * Fusão de SkinnedPhongMaterial (matriz de skinning via joints/weights, grupo
- * 1 = pool de poses) com TexturedOpaquePhong (textura diffuse/specular
- * opcional, grupo 2). Faltava — Dmitry/Nat usavam TexturedOpaquePhong (que só
- * declara position/normal/uv e lê `objects[instance].model` como se o grupo 1
- * fosse ObjectData{model,normalMatrix}), mas quem os desenha é o
- * GauntletSkinnedRenderPass, cujo grupo 1 são as matrizes de OSSO — conteúdo
- * TOTALMENTE diferente no mesmo binding. O shader nunca lia
- * joints/weights (T-pose sempre, skinning é no-op) e "model"/"normalMatrix"
- * na prática liam as duas primeiras matrizes de osso por cima do buffer
- * errado — daí o corpo inteiro (ainda em bind pose) balançando
- * junto com a sutil animação daquele osso. Só existe a variante Skinned
- * (mesmo espírito de SkinnedPhongMaterial.getPipeline) — pra mesh estática
- * com textura, use TexturedOpaquePhong.
- */
-const TEXTURED_SKINNED_PHONG_WGSL = /* wgsl */ `
+import { BIND_GROUP_0_LIGHT_SETS, LIGHT_STRUCTS } from "./shader_includes/lights";
+import { SHADOW_FACTOR } from "./shader_includes/shadows";
+const GRASS_WGSL = /* wgsl */ `
+// dados per frame
 struct Frame {
-    view: mat4x4f,
-    proj: mat4x4f,
-    cameraPos: vec4f,
-    lightCounts: vec4u, //x=numPoint, y=numSpot, z=numDirectional, w=reservado
-};
-struct PointLight {
-    position: vec3f,
-    intensity: f32,
-    color: vec3f,
-    _pad0: f32,
-};
-struct SpotLight {
-    position: vec3f,
-    intensity: f32,
-    direction: vec3f,
-    cosOuter: f32,
-    color: vec3f,
-    cosInner: f32,
-    shadowViewProj: mat4x4f,
-    shadowIndex: f32,
-    _pad0: f32,
-    _pad1: f32,
-    _pad2: f32,
-};
-struct DirectionalLight {
-    direction: vec3f,
-    intensity: f32,
-    color: vec3f,
-    shadowIndex: f32,
-    shadowViewProj: mat4x4f,
-};
+    view: mat4x4f, proj:mat4x4f, cameraPos:vec4f, 
+    lightCounts: vec4u //ver Skinned Phong pra explicação.
+}
+${LIGHT_STRUCTS}
 @group(0) @binding(0) var<uniform> frame: Frame;
-@group(0) @binding(1) var<storage, read> pointLights: array<PointLight>;
-@group(0) @binding(2) var<storage, read> spotLights: array<SpotLight>;
-@group(0) @binding(3) var<storage, read> directionalLights: array<DirectionalLight>;
+${BIND_GROUP_0_LIGHT_SETS}
 @group(0) @binding(4) var spotShadowMap: texture_depth_2d_array;
 @group(0) @binding(5) var directionalShadowMap: texture_depth_2d_array;
 @group(0) @binding(6) var shadowSampler: sampler_comparison;
@@ -61,41 +19,20 @@ struct DirectionalLight {
 //o GauntletSkinnedRenderPass), não ObjectData{model,normalMatrix}.
 @group(1) @binding(0) var<storage, read> poses: array<mat4x4f>;
 @group(1) @binding(1) var<storage, read> boneOffsets: array<u32>;
+
 struct MaterialParams {
     diffuseColor: vec4f,
     specularColor: vec3f,
     shininess: f32,
     ambient: vec3f,
-};
+}
 @group(2) @binding(0) var<uniform> material: MaterialParams;
 @group(2) @binding(1) var texSampler: sampler;
 @group(2) @binding(2) var diffuseTex: texture_2d<f32>;
 @group(2) @binding(3) var specularTex: texture_2d<f32>;
+@group(2) @binding(4) var alphaTex: texture_2d<f32>;
 
-fn sampleShadowPCF(map: texture_depth_2d_array, layer: i32, uv: vec2f, refDepth: f32) -> f32 {
-    let dims = textureDimensions(map);
-    let texel = 1.0 / vec2f(f32(dims.x), f32(dims.y));
-    var sum = 0.0;
-    for (var dx = -1; dx <= 1; dx = dx + 1) {
-        for (var dy = -1; dy <= 1; dy = dy + 1) {
-            sum = sum + textureSampleCompareLevel(map, shadowSampler, uv + vec2f(f32(dx), f32(dy)) * texel, layer, refDepth);
-        }
-    }
-    return sum / 9.0;
-}
-
-fn shadowFactor(worldPos: vec3f, shadowViewProj: mat4x4f, shadowIndex: f32, map: texture_depth_2d_array) -> f32 {
-    let clip = shadowViewProj * vec4f(worldPos, 1.0);
-    if (clip.w <= 0.0) {
-        return 1.0;
-    }
-    let ndc = clip.xyz / clip.w;
-    if (ndc.x < -1.0 || ndc.x > 1.0 || ndc.y < -1.0 || ndc.y > 1.0 || ndc.z < 0.0 || ndc.z > 1.0) {
-        return 1.0;
-    }
-    let uv = vec2f(ndc.x * 0.5 + 0.5, 0.5 - ndc.y * 0.5);
-    return sampleShadowPCF(map, i32(shadowIndex), uv, ndc.z);
-}
+${SHADOW_FACTOR}
 
 struct VsOut {
     @builtin(position) position: vec4f,
@@ -103,7 +40,9 @@ struct VsOut {
     @location(1) worldPosition: vec3f,
     @location(2) uv: vec2f,
 };
-
+// VERTEX SHADER - é aqui que a gente aplica a skin. Mantenha em mente que toda renderização 
+// no nosso renderer é instanciada e que a gente precisa saber o offset da instancia atual
+// nos buffers.
 @vertex
 fn vs(
     @location(0) position: vec3f,
@@ -113,15 +52,15 @@ fn vs(
     @location(4) weights: vec4f,
     @builtin(instance_index) instance: u32,
 ) -> VsOut {
-    //Matriz de skinning combinada: média ponderada das poses das 4 juntas
-    //que influenciam o vértice — mesma conta de SkinnedPhongMaterial.
-    let base = boneOffsets[instance];
-    let m =
+    let base = boneOffsets[instance];  ///o começo dos ossos dessa instância
+    //transform dos ossos
+    let m = 
         poses[base + joints.x] * weights.x +
         poses[base + joints.y] * weights.y +
         poses[base + joints.z] * weights.z +
-        poses[base + joints.w] * weights.w;
-
+        poses[base + joints.w] * weights.w ;
+    // a world de um pass skinned é a soma ponderada das matrizes das poses dos ossos, n tem uma
+    // "world" explícita como a dos static mesh.    
     let worldPos = m * vec4f(position, 1.0);
     var out: VsOut;
     out.worldPosition = worldPos.xyz;
@@ -130,7 +69,8 @@ fn vs(
     out.uv = uv;
     return out;
 }
-
+// FRAGMENT SHADER - Basicamente igual ao do TexturedSkinnedPhong exceto no final, onde 
+// a gente usa o alphaMap.
 @fragment
 fn fs(in: VsOut) -> @location(0) vec4f {
     let albedo = textureSample(diffuseTex, texSampler, in.uv) * material.diffuseColor;
@@ -183,13 +123,19 @@ fn fs(in: VsOut) -> @location(0) vec4f {
     }
 
     let litColor = material.ambient * albedo.rgb + diffuse * albedo.rgb + specular * specTint;
-    return vec4f(litColor, albedo.a);
+    //opacidade vem do alpha map.
+    let alpha = textureSample(alphaTex, texSampler, in.uv);
+    return vec4f(litColor, alpha.a);
 }
 `;
-
-export interface TexturedSkinnedPhongOptions {
-    /** O material assume a posse (destroy() a libera). Ausente = usa diffuseColor. */
-    diffuseTexture?: GPUTexture;
+/**
+ * O material assume a posse das texturas passadas pra ele.
+ */
+export interface GrassMaterialOptions {
+    /** Grass exige diffuse texture */
+    diffuseTexture: GPUTexture;
+    /** Grass exige alpha texture */
+    alphaTexture: GPUTexture;
     /** Sem textura: a cor do material. Com textura: tint (default branco = neutro). */
     diffuseColor?: [number, number, number, number];
     /** O material assume a posse (destroy() a libera). Ausente = usa specularColor. */
@@ -199,114 +145,148 @@ export interface TexturedSkinnedPhongOptions {
     /** Expoente de brilho (shininess): maior = brilho mais concentrado. */
     shininess?: number;
     ambient?: [number, number, number];
+    /** Abaixo deste alpha o fragmento não bloqueia luz no shadow map (default
+     *  0.5) — ver shadowAlphaMask(). Mais alto = sombra mais rala (só o miolo
+     *  opaco da folha projeta); mais baixo = sombra mais cheia, e a franja
+     *  antialiasada da textura vira sombra sólida. */
+    shadowAlphaCutoff?: number;
 }
-
-export class TexturedSkinnedPhong extends Material {
-    //---- nível do TIPO: static, compartilhado por todas as instâncias ----
+/**
+ * Material do grass, baseado no 
+ * https://developer.nvidia.com/gpugems/gpugems/part-i-natural-effects/chapter-7-rendering-countless-blades-waving-grass
+ * A alteração que eu farei em relação ao que o artigo propões é o grass ter sua deformação
+ * controlada por skin.
+ * 
+ * O material tem uma textura difuse e uma textura de alpha channel.
+ * 
+ * Então esse material tem que ser usado no pass de skin (blending é responsabilidade da pipeline,
+ * não do renderpass) 
+*/
+export class GrassMaterial extends Material {
+    /// O shader compilado, que nem o vkShaderModule.
     private static shaderModule: GPUShaderModule | null = null;
+    /// Cada material tem seu proprio bind group layout. O bind group layout mapeia o que vai em cada
+    /// binding. No nosso esquema o bind group 2 é o bind group específico do material. 
     private static materialLayout: GPUBindGroupLayout | null = null;
-    private static sampler: GPUSampler | null = null;
-
-    private static readonly pipelines = new Map<MeshType, GPURenderPipeline>();
-
-    private static getMaterialBindGroupLayout(device: GPUDevice): GPUBindGroupLayout {
-        if (!this.materialLayout) {
+    /// Todas as texturas usarão o mesmo sampler pq todas são amostradas da mesma forma, 
+    // então um sampler só serve pra todas.
+    private static sampler: GPUSampler|null = null;
+    /// Retorna o bind group de material (group #2). Se não existir ainda, cria.
+    private static getMaterialBindGroupLayout(device: GPUDevice) : GPUBindGroupLayout {
+        if(!this.materialLayout) {
             this.materialLayout = device.createBindGroupLayout({
-                label: "TexturedSkinnedPhong material",
+                label:"GrassMaterial bind group layout",
                 entries: [
-                    { binding: 0, visibility: GPUShaderStage.FRAGMENT, buffer: { type: "uniform" } },
-                    { binding: 1, visibility: GPUShaderStage.FRAGMENT, sampler: {} },
-                    { binding: 2, visibility: GPUShaderStage.FRAGMENT, texture: {} },
-                    { binding: 3, visibility: GPUShaderStage.FRAGMENT, texture: {} },
-                ],
-            });
+                    {binding:0, visibility: GPUShaderStage.VERTEX| GPUShaderStage.FRAGMENT, buffer:{type:"uniform"}},
+                    {binding:1, visibility: GPUShaderStage.FRAGMENT, sampler:{}},
+                    {binding:2, visibility: GPUShaderStage.FRAGMENT, texture:{}},
+                    {binding:3, visibility: GPUShaderStage.FRAGMENT, texture:{}},
+                    {binding:4, visibility: GPUShaderStage.FRAGMENT, texture:{}},
+                ]
+            })
         }
         return this.materialLayout;
     }
-
+    /// Igual à getMaterialBindGroupLayout, só que pro sampler
     private static getSampler(device: GPUDevice): GPUSampler {
-        if (!this.sampler) {
+        if(!this.sampler) {
             this.sampler = device.createSampler({
-                label: "TexturedSkinnedPhong sampler",
+                label: "GrassMaterial sampler",
                 magFilter: "linear",
                 minFilter: "linear",
-                addressModeU: "repeat",
-                addressModeV: "repeat",
-            });
+                addressModeU:"repeat",
+                addressModeV:"repeat"
+            });   
         }
         return this.sampler;
     }
 
     private static createPipeline(ctx: PipelineContext): GPURenderPipeline {
-        const { device } = ctx;
-        if (!this.shaderModule) {
+        const {device} = ctx;
+        // Lazy-initialize do shader module
+        if(!this.shaderModule) {
             this.shaderModule = device.createShaderModule({
-                label: "TexturedSkinnedPhong shader",
-                code: TEXTURED_SKINNED_PHONG_WGSL,
+                label: "GrassMaterial shaderModule",
+                code: GRASS_WGSL
             });
         }
         return device.createRenderPipeline({
-            label: "TexturedSkinnedPhong",
+            label: "GrassMaterial pipeline",
             layout: device.createPipelineLayout({
-                label: "TexturedSkinnedPhong pipeline layout",
+                label: "GrassMaterial pipeline layout",
                 bindGroupLayouts: [
                     ctx.frameBindGroupLayout,
                     ctx.objectBindGroupLayout,
-                    this.getMaterialBindGroupLayout(device),
+                    this.getMaterialBindGroupLayout(device)
                 ],
             }),
             vertex: {
-                module: this.shaderModule,
+                module: this.shaderModule, 
                 entryPoint: "vs",
-                buffers: [SkinnedMesh.vertexLayout],
+                buffers: [SkinnedMesh.vertexLayout]
             },
             fragment: {
                 module: this.shaderModule,
                 entryPoint: "fs",
-                targets: [{ format: ctx.colorFormat }],
+                targets: [
+                    {
+                        format: ctx.colorFormat,
+                        blend: {
+                            color: { srcFactor: "src-alpha", dstFactor: "one-minus-src-alpha" },
+                            alpha: { srcFactor: "one", dstFactor: "one-minus-src-alpha" },
+                        }
+                    }]
             },
-            primitive: { topology: "triangle-list", cullMode: "back" },
+            primitive: {topology: "triangle-list", cullMode: "none"},
             depthStencil: {
                 format: ctx.depthFormat,
                 depthWriteEnabled: true,
-                depthCompare: "less",
-            },
-        });
+                depthCompare: "less"
+            }
+        })
     }
-
-    //---- nível da INSTÂNCIA: params + texturas desta instância ----
-    //Mesmo layout de TexturedOpaquePhong: 12 floats / 48 bytes contíguos.
     private static readonly FLOATS = 12;
-
     private readonly device: GPUDevice;
     private readonly paramsBuffer: GPUBuffer;
     private readonly bindGroup: GPUBindGroup;
-    private readonly params = new Float32Array(TexturedSkinnedPhong.FLOATS);
+    private readonly params = new Float32Array(GrassMaterial.FLOATS);
     private readonly ownedTextures: GPUTexture[] = [];
+    //Guardados pro shadowAlphaMask(): a MESMA textura de alpha que o fragment
+    //shader usa pra compor, agora servindo de recorte no shadow map. Uma fonte
+    //de verdade só — sombra e silhueta não podem discordar sobre onde tem folha.
+    private readonly alphaView: GPUTextureView;
+    private readonly shadowAlphaCutoff: number;
 
-    constructor(device: GPUDevice, options: TexturedSkinnedPhongOptions = {}) {
+    constructor(device: GPUDevice, options:GrassMaterialOptions){
         super();
         this.device = device;
+        //Cria o buffer que guarda
         this.paramsBuffer = device.createBuffer({
-            label: "TexturedSkinnedPhong params",
-            size: TexturedSkinnedPhong.FLOATS * 4,
-            usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
-        });
-
-        const white = Material.getWhiteTexture(device);
-        if (options.diffuseTexture) this.ownedTextures.push(options.diffuseTexture);
-        if (options.specularTexture) this.ownedTextures.push(options.specularTexture);
+            label: "GrassMaterial params buffer",
+            size: GrassMaterial.FLOATS * 4,
+            usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST
+        });  
+        const defaultWhiteTexture = Material.getWhiteTexture(device);
+        /// assume o controle das texturas
+        this.ownedTextures.push(options.alphaTexture);
+        this.ownedTextures.push(options.diffuseTexture);
+        if(options.specularTexture) 
+            this.ownedTextures.push(options.specularTexture)
+        //amarra os objetos (resources) às posições no bind group
         this.bindGroup = device.createBindGroup({
-            label: "TexturedSkinnedPhong instance",
-            layout: TexturedSkinnedPhong.getMaterialBindGroupLayout(device),
+            label: "GrassMaterial instance bind group",
+            layout: GrassMaterial.getMaterialBindGroupLayout(device),
             entries: [
-                { binding: 0, resource: { buffer: this.paramsBuffer } },
-                { binding: 1, resource: TexturedSkinnedPhong.getSampler(device) },
-                { binding: 2, resource: (options.diffuseTexture ?? white).createView() },
-                { binding: 3, resource: (options.specularTexture ?? white).createView() },
-            ],
+                { binding:0, resource: {buffer:this.paramsBuffer}},
+                { binding:1, resource: GrassMaterial.getSampler(device)},
+                { binding:2, resource: options.diffuseTexture.createView()},
+                { binding:3, resource: (options.specularTexture ?? defaultWhiteTexture).createView()},
+                { binding:4, resource: options.alphaTexture.createView()}
+            ]
         });
-
+        this.alphaView = options.alphaTexture.createView();
+        this.shadowAlphaCutoff = options.shadowAlphaCutoff ?? 0.5;
+        //seta os parâmetros do material
         this.params.set(options.diffuseColor ?? [1, 1, 1, 1], 0);
         this.params.set(options.specularColor ?? [1, 1, 1], 4);
         this.params[7] = options.shininess ?? 32;
@@ -344,23 +324,39 @@ export class TexturedSkinnedPhong extends Material {
     private upload(): void {
         this.device.queue.writeBuffer(this.paramsBuffer, 0, this.params);
     }
-
-    //Só existe a variante Skinned: mesmo espírito de SkinnedPhongMaterial —
-    //pra mesh estática com textura, use TexturedOpaquePhong.
-    override getPipeline(ctx: PipelineContext, meshType: MeshType): GPURenderPipeline {
+    
+    private static readonly pipelines = new Map<MeshType, GPURenderPipeline>();
+    
+    getPipeline(ctx: PipelineContext, meshType: MeshType): GPURenderPipeline {
         if (meshType !== MeshType.Skinned) {
-            throw new Error("TexturedSkinnedPhong só desenha meshes Skinned.");
+            throw new Error("GrassMaterial só desenha meshes Skinned.");
         }
-        let pipeline = TexturedSkinnedPhong.pipelines.get(meshType);
+        let pipeline = GrassMaterial.pipelines.get(meshType);
         if (!pipeline) {
-            pipeline = TexturedSkinnedPhong.createPipeline(ctx);
-            TexturedSkinnedPhong.pipelines.set(meshType, pipeline);
+            pipeline = GrassMaterial.createPipeline(ctx);
+            GrassMaterial.pipelines.set(meshType, pipeline);
         }
         return pipeline;
     }
-
-    override getBindGroup(): GPUBindGroup {
+    getBindGroup(): GPUBindGroup {
         return this.bindGroup;
+    }
+
+    /**
+     * A grama é o caso que motivou isto existir: sem recorte, cada tufo projeta
+     * a sombra do QUAD, não a das folhas — e com milhares de tufos o chão vira
+     * um xadrez de chapas retangulares.
+     *
+     * O cutoff é lido UMA vez, quando o shadow pass monta o bind group deste
+     * material; mudar depois não repropaga (é parâmetro de construção, não
+     * knob de runtime).
+     */
+    override shadowAlphaMask() {
+        return {
+            view: this.alphaView,
+            sampler: GrassMaterial.getSampler(this.device),
+            cutoff: this.shadowAlphaCutoff,
+        };
     }
 
     override destroy(): void {

@@ -3,6 +3,7 @@ import { destroyRegisteredMaterials } from "./material";
 import { destroyInstance } from "./prefab";
 import { store } from "./redux/store";
 import { hideLoadingScreen, showLoadingScreen } from "./redux/actions";
+import { cpuTimer } from "./cpuTimer";
 /**
  * O mundo tem um nó raiz chamado ROOT e é dono da própria sequência de
  * render passes — cada mundo renderiza de um jeito (este com mesh+final,
@@ -157,7 +158,11 @@ export abstract class World  {
         //nós com lateUpdate, coletados NESTA passada em pré-ordem (top-down) —
         //revisitados depois sem varrer a árvore de novo.
         const lateNodes:Node[] = [];
+        //contado DENTRO do percurso, de graça: é o denominador de todo tempo
+        //medido aqui ("3ms de update" não diz nada sem "com quantos nós").
+        let visitados = 0;
         const visit = (node:Node) => {
+            visitados++;
             let hasLate = false;
             for (const behaviour of node.behaviours) {
                 behaviour.callStartIfHaventYet();
@@ -170,7 +175,14 @@ export abstract class World  {
                 visit(child);
             }
         };
+        //As duas passadas são medidas SEPARADAS porque escalam diferente: o
+        //percurso é O(nós) e cresce com decoração (grama, tiles); o lateUpdate
+        //é O(nós com lateUpdate + suas subárvores) e cresce com câmeras/follows.
+        //Somadas num número só, ninguém saberia qual das duas estourou.
+        cpuTimer.begin("traverse");
         visit(this.rootNode);
+        cpuTimer.end("traverse");
+        cpuTimer.setTreeCounts(visitados, lateNodes.length);
         //lateUpdate (câmeras que seguem alvo): roda com a árvore toda já
         //posicionada, então o follow lê o alvo DESTE frame, não do anterior
         //(era o que tremia). lateNodes está em ordem top-down, então um
@@ -183,12 +195,14 @@ export abstract class World  {
                 refreshSubtree(child);
             }
         };
+        cpuTimer.begin("lateUpdate");
         for (const node of lateNodes) {
             for (const behaviour of node.behaviours) {
                 behaviour.lateUpdate(deltaTime);
             }
             refreshSubtree(node);
         }
+        cpuTimer.end("lateUpdate");
         //Agora que a travessia terminou, é seguro mexer na árvore: destrói de
         //fato (immediate=true) os nós agendados durante o frame.
         this.scheduledNodesForDestruction.forEach(n=>this.destroyNode(n, true));

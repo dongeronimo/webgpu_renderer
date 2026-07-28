@@ -247,7 +247,7 @@ Server → Client:
 {"operation":"welcome",   "id":7, "instanceId":3, "tickRate":20, "tick":4000}
 {"operation":"mapSync",   "w":32, "h":32, "cells":[{"category":"wall","type":"basicWall"},
                                           {"category":"passable","type":"dirtGround",
-                                           "extras":{"grassSeed":"8f31c2"}}, ...]}
+                                           "extras":{"grassSeed":"1f8f31c2"}}, ...]}
 {"operation":"stateSync", ...}                   // semi-estático + spawn em massa
                                                  // de tudo que está vivo
 {"operation":"spawn",     "ents":[{"id":9,"kind":"player","owner":9,"x":0,"z":0,"yaw":0}]}
@@ -271,6 +271,28 @@ Server → Client:
   o que não merece virar tipo — `playerSpawn` (índice do spawn), `exit`, e a
   motivação original: a SEED da grama, uma string que o gerador do client
   expande em N tufos localmente em vez de a rede mandar node por tufo.
+
+`grassSeed` é um u32 em 8 hex minúsculos, com duas informações empacotadas:
+
+```
+"1f8f31c2"
+ ^^
+ ||__ bits 24..31: DENSIDADE 0..255 — quantos tufos plantar (0x1f = 31)
+    |
+    |_ bits  0..23: SEED — de onde saem posição, rotação e escala de cada tufo
+```
+
+Quem decide a densidade é o SERVER porque ela vem da forma da dungeon: é a
+abertura da célula (quantos dos 8 vizinhos são andáveis) elevada ao quadrado —
+corredor de 1 célula dá 15, meio de sala dá 255. Assim a vegetação desenha a
+silhueta do mapa sem ninguém pintar grama à mão. Célula sem o extra não tem
+grama nenhuma; densidade 0 não existe no fio.
+
+Isto NÃO é procgen compartilhado: o client não regenera mapa nenhum, ele
+desempacota um valor pronto pra decorar uma célula que já recebeu descrita. O
+gerador de tufos do client tem que usar hash inteiro de 32 bits (`Math.imul` +
+`>>> 0`), nunca `fract(sin(x)*k)` — se um dia a expansão migrar pra compute
+shader, o WGSL precisa dar bit a bit o mesmo resultado.
 
 Era uma STRING por linha de tiles, estilo roguelike, legível no DevTools; um
 char por célula não descrevia nada, então todo dado extra virava campo

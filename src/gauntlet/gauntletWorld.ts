@@ -57,6 +57,7 @@ import { GauntletSkinnedRenderPass } from "./gauntletSkinnedRenderPass";
 import { AnimatorBehaviour } from "../skinning/AnimatorBehaviour";
 import type { AnimationClip } from "../animation";
 import { store } from "../redux/store";
+import { GrassMaterial } from "./materials/Grass";
 
 //A dungeon só é INSTANCIADA via rede (fabricate de Wall00/Floor00 no
 //mapSync do GauntletNetwork), bem depois do createWorld() retornar — não dá
@@ -158,6 +159,15 @@ export class GauntletWorld extends World implements PrefabFabricator {
                 shininess: 16
             }
         )
+
+        const grassMat = new GrassMaterial(
+            this.device, {
+                diffuseTexture: await loadTexture(this.device, "/textures/grass_diffuse.png"),
+                alphaTexture: await loadTexture(this.device, "/textures/grass_alpha.png"),
+                shininess: 16,
+                diffuseColor: [1,1,1,1]
+            }
+        )
         //TexturedSkinnedPhong, não TexturedOpaquePhong: Dmitry/Nat são meshes
         //SKINNED (desenhados pelo GauntletSkinnedRenderPass, grupo 1 =
         //SkinObject) — TexturedOpaquePhong espera ObjectData{model,normalMatrix}
@@ -200,6 +210,7 @@ export class GauntletWorld extends World implements PrefabFabricator {
         registerMaterial("abigailSkin", abiSkinTexture);
         registerMaterial("ramirezSkin", ramirezSkinTexture);
         registerMaterial("dirt", dirt);
+        registerMaterial("grass", grassMat);
         //Câmera fixa quase top-down enquadrando a dungeon INTEIRA: o mapa é
         //32×32 células × tile 2 = 64×64 unidades, centrado na origem pelo
         //serverToWorld do GauntletNetwork (spans ±32 em x/z). A leve inclinação
@@ -263,7 +274,8 @@ export class GauntletWorld extends World implements PrefabFabricator {
         //prontos — sem isso o mapSync pode correr contra o carregamento do glb,
         //e mapSync chega UMA vez (perdeu a corrida = mundo vazio pra sempre).
         await this.loadModularDungeon();
-
+        
+        await this.loadGrass();
         //Clips compartilhados por TODOS os personagens — mesmo esqueleto do rig
         //mixamorig:*, casam por nome sem retargeting (ver animation.ts). UM
         //carregamento só, montado num HeroAnimSet e passado igual pra cada
@@ -319,8 +331,9 @@ export class GauntletWorld extends World implements PrefabFabricator {
             if(node.name === "Wall00") {
                 this.createPrefab(node, "Wall00");
             }
-        })
+        });
     }
+
     //Um clip só-de-keyframes (sem mesh), mesmo padrão do capoeira.glb do
     //SkinningDemoWorld — ver skinning-system.
     private async loadAnimClip(path: string): Promise<AnimationClip> {
@@ -363,7 +376,28 @@ export class GauntletWorld extends World implements PrefabFabricator {
         const prefab = Prefab.fromTemplate(armature, prefabName);
         this.prefabs.set(prefabName, prefab);
     }
-
+    /***
+     * Carrega o grass00. Lembrar que o grass é uma skin, pq é o jeito q eu encontrei pra implementar 
+     * https://developer.nvidia.com/gpugems/gpugems/part-i-natural-effects/chapter-7-rendering-countless-blades-waving-grass
+     * em 2026.
+     * 
+     * O material será sempre o grass00, pq ele é o material especial pra gramas.
+     */
+    private async loadGrass() {
+        debugger;
+        const {roots, nodes, meshes, skins} = await loadGltf(this.device, "/models/grass00.glb");
+        this.meshes.push(...meshes);
+        nodes.filter(n=>n.renderable && n.skin).forEach(n=>{
+            n.renderable!.passMask = RenderPassBit.Skinned; //TODO: um dia fazer um pass exclusivo pra grama
+            n.renderable!.material = getMaterial("grass");
+        });
+        const armature = roots.find(n=>n.name === "Armature");
+        if(!armature) throw new Error(`Nó armature n encontrado no grass`);
+        armature.setParent(null);
+        const prefab = Prefab.fromTemplate(armature, "grass00");
+        this.prefabs.set("grass00", prefab);
+    }
+   
     private createPrefab(n:Node, s:string){
         n.setParent(null);
         this.prefabs.set(s, Prefab.fromTemplate(n, s));

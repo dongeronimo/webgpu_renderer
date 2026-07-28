@@ -90,4 +90,8 @@ export const MapExtras = {
     PLAYER_SPAWN: "playerSpawn",
     /** Valor "true" — a saída, onde o boss vai morar. */
     EXIT: "exit",
+    /** Valor = u32 em 8 hex ("1f8f31c2"): 8 bits altos de DENSIDADE (0..255,
+     *  quantos tufos plantar) + 24 bits de SEED (de onde saem posição, rotação
+     *  e escala de cada tufo). Ausente = célula sem grama. */
+    GRASS_SEED: "grassSeed",
 } as const;

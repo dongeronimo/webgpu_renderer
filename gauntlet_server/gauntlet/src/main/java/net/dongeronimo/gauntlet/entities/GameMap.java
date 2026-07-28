@@ -26,6 +26,24 @@ public class GameMap {
      *  Antes era um TIPO de tile (EXIT), o que misturava semântica de gameplay
      *  com material do chão — a saída é chão de terra igual aos outros. */
     public static final String EXTRA_EXIT = "exit";
+    /**
+     * Extra do chão que tem grama. Valor = um u32 em 8 hex minúsculos
+     * ("1f8f31c2"), com DUAS informações empacotadas:
+     * <ul>
+     *   <li>bits 24..31 — DENSIDADE (0..255): quantos tufos o client planta.
+     *       Quem decide é o server porque a densidade vem da forma da dungeon
+     *       (ver MapGenerator), que só ele conhece.</li>
+     *   <li>bits 0..23 — SEED de distribuição: de onde o client tira posição,
+     *       rotação e escala de cada tufo.</li>
+     * </ul>
+     * Ausente = sem grama nenhuma; não existe densidade 0 no fio.
+     *
+     * É a razão de os extras existirem: uma célula com 40 tufos custa 8 chars
+     * no mapSync em vez de 40 posições, e o client expande localmente. O que
+     * viaja é DADO (o valor pronto), não procgen compartilhado — o client nunca
+     * roda o gerador do server, só desempacota isto.
+     */
+    public static final String EXTRA_GRASS_SEED = "grassSeed";
 
     private final int width;
     private final int height;

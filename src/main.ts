@@ -1,5 +1,6 @@
 import { initWebGPU } from "./gpu";
 import { gpuTimer } from "./gpuTimer";
+import { cpuTimer } from "./cpuTimer";
 import { mountUi } from "./ui/mountUi";
 import { registerBehaviour } from "./behaviour";
 import { RotationBehaviour } from "./rotation_behaviour";
@@ -131,11 +132,24 @@ async function main() {
     else {
        const deltaTime = (time - lastTime) / 1000; //segundos desde o frame anterior
        gpuTimer.beginFrame(); //zera os slots de timestamp e conta o fps
+       cpuTimer.beginFrame(); //solta spans que um throw tenha deixado abertos
+       //"update" medido AQUI, não dentro de World.update: os mundos
+       //sobrescrevem update() (o GauntletWorld lê o redux antes do super), e é
+       //o custo TOTAL do frame de CPU que interessa, não só o da base.
+       cpuTimer.begin("update");
        currentWorld.update(deltaTime);
+       cpuTimer.end("update");
        lastTime = time;
        const encoder = device.createCommandEncoder();//O encoder conterá os comandos
-       //O mundo grava sua sequência de passes; o main só faz encoder/submit
+       //O mundo grava sua sequência de passes; o main só faz encoder/submit.
+       //"render" aqui é tempo de CPU: montar DrawItems, ordenar por
+       //(pipeline, material, mesh) e escrever o pool de poses osso a osso. Não
+       //se confunde com o "gpu" do gpuTimer, que é quanto a command list levou
+       //DEPOIS de submetida — com instancing o draw é um só, mas a preparação
+       //dele continua sendo por instância, e é este número que a denuncia.
+       cpuTimer.begin("render");
        currentWorld.render(encoder);
+       cpuTimer.end("render");
        gpuTimer.endFrame(encoder); //resolve as queries — antes do finish
        queue.submit([encoder.finish()]);
        gpuTimer.readback(); //leitura assíncrona do frame medido

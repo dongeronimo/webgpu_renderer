@@ -7,7 +7,8 @@ import { SpotLight } from "../Light";
 import { store } from "../redux/store";
 import { gauntletShowCharacterSelectionScreen } from "../redux/actions";
 import type { EntityDto, GameServerMessage, MapCellDto, MapSyncMessage } from "./dto/ServerMessage";
-import { GauntletMap } from "./gauntletMap";
+import { GauntletMap, MapExtras } from "./gauntletMap";
+import { GRASS_MAX_BLADES_PER_CELL, GRASS_PREFAB, decodeGrassSeed, generateGrassBlades } from "./grass";
 import type { PlayerControllerSettingsDto } from "./dto/PlayerControllerSettingsDto";
 import { destroyInstance } from "../prefab";
 import MineAvatarBehaviour from "./MineAvatarBehaviour";
@@ -67,6 +68,15 @@ export default class GauntletNetworkBehaviour extends Behaviour{
     //ver NetworkedEntityBehaviour.
     private entities = new Map<number, NetworkedEntityBehaviour>();
     private mapNode!: Node;
+    //filho do Map só pra vegetação — ver onMapSync.
+    private grassNode!: Node;
+    //contadores do log de uma linha do mapSync (quantas células ganharam grama
+    //e quantos tufos saíram) — é o termômetro de "o dado chegou?" enquanto o
+    //gerador está sendo escrito.
+    private grassCells = 0;
+    private grassBlades = 0;
+    //gerador estourando o teto por célula avisa uma vez, não uma por célula
+    private warnedGrassOverflow = false;
     //container irmão do Map: pawns de player, separado pra não confundir
     //teardown de mapa (estático, nunca destrói) com teardown de entidade
     //(despawn destrói o node individual)
@@ -280,7 +290,7 @@ export default class GauntletNetworkBehaviour extends Behaviour{
             if(msg.operation === "mapSync") {
                 // {"operation":"mapSync", "w":32, "h":32, "cells":[
                 //   {"category":"wall","type":"basicWall"},
-                //   {"category":"passable","type":"dirtGround","extras":{"grassSeed":"8f31c2"}}, ...]}
+                //   {"category":"passable","type":"dirtGround","extras":{"grassSeed":"1f8f31c2"}}, ...]}
                 // row-major, w*h células — ver GauntletMap
                 try {
                     this.onMapSync(msg);
@@ -437,6 +447,12 @@ export default class GauntletNetworkBehaviour extends Behaviour{
         this.mapNode = new Node();
         this.mapNode.name = "Map";
         this.node.addChild(this.mapNode);
+        //Container só da vegetação, irmão do resto do mapa: a grama é a coisa
+        //que mais faz node aqui (dezenas por célula), e separar mantém o
+        //getAllNodes legível e deixa "sumir com a grama" a um setParent(null).
+        this.grassNode = new Node();
+        this.grassNode.name = "Grass";
+        this.mapNode.addChild(this.grassNode);
         this.gameMap.forEachCell((cell, x, z) => {
             //Só importam os espaços onde eu posso andar — pela CATEGORIA, não
             //pelo tipo: chão novo que este client não conhece continua sendo
@@ -445,6 +461,9 @@ export default class GauntletNetworkBehaviour extends Behaviour{
             //célula (x,z) → tile no CENTRO dela (x+0.5, z+0.5): mesh do
             //tile tem origem no centro (conferido no glb)
             this.fabricateFloor(cell, x, z);
+            //A decoração vem DEPOIS do chão dela, e é local: nada disso viaja
+            //node a node pela rede, tudo sai do que o server compactou no extra.
+            this.fabricateGrass(cell, x, z);
             //Paredes: um painel por face aberta→fechada, plantado NA
             //aresta entre as duas células. O Wall00 corre ao longo de X
             //com base em y=0 (medido no glb): norte/sul saem na orientação
@@ -454,6 +473,9 @@ export default class GauntletNetworkBehaviour extends Behaviour{
             this.fabricateWallIfSolid(x - 1, z,     x,       z + 0.5, true);  //oeste
             this.fabricateWallIfSolid(x + 1, z,     x + 1,   z + 0.5, true);  //leste
         });
+        //Uma linha, uma vez: enquanto o gerador estiver sendo escrito é o que
+        //diz se o problema é o dado que chegou ou o algoritmo que o expande.
+        console.log(`GauntletNetwork: grama em ${this.grassCells} células, ${this.grassBlades} tufos`);
     }
 
     //O chão de UMA célula. É aqui que a decoração local se pendura: a célula
@@ -466,6 +488,45 @@ export default class GauntletNetworkBehaviour extends Behaviour{
             [this.serverToWorldX(x + 0.5), 0, this.serverToWorldZ(z + 0.5)],
             prefab, this.mapNode
         );
+    }
+
+    //A grama de UMA célula: o server mandou UM valor (extra grassSeed), o
+    //gerador local expande em N tufos e aqui eles viram node. A divisão de
+    //tarefas é essa: grass.ts decide ONDE (em coordenada de célula, 0..1), 
+    //este método decide, pq quem sabe traduzir célula→mundo é esta classe, 
+    //e ela é a única que sabe (serverToWorldX/Z). O gerador não vê tileWidth 
+    //nem prefab.
+    //Basicamente isso impede que vaze informação de posição global e de escolha
+    //de prefabs pro generateGrassBlades que não tem pq saber nada disso.
+    private fabricateGrass(cell: MapCellDto, x: number, z: number): void {
+        const grass = decodeGrassSeed(cell.extras?.[MapExtras.GRASS_SEED]);
+        if (grass === undefined) return; //célula sem grama: extra ausente
+        const blades = generateGrassBlades(x, z, grass);
+        if (blades.length === 0) return;
+        //Truncagem defensiva: um gerador com bug (loop errado, densidade lida
+        //como contagem) faria milhares de nodes SKINNED por célula e travaria a
+        //aba antes de qualquer mensagem de erro aparecer. Melhor grama faltando
+        //e um warn do que a página morta.
+        const usados = Math.min(blades.length, GRASS_MAX_BLADES_PER_CELL);
+        if (blades.length > usados && !this.warnedGrassOverflow) {
+            this.warnedGrassOverflow = true; //uma vez, não uma por célula
+            console.warn(`GauntletNetwork: gerador devolveu ${blades.length} tufos numa célula, ` +
+                `truncando em ${GRASS_MAX_BLADES_PER_CELL} (ver GRASS_MAX_BLADES_PER_CELL)`);
+        }
+        for (let i = 0; i < usados; i++) {
+            const blade = blades[i];
+            //u/v são posição DENTRO da célula (0..1), então a coordenada de
+            //célula é x+u — mesma conta do centro do tile (x+0.5), com o meio
+            //trocado pelo que o gerador escolheu. y=0: o chão mora em y=0.
+            const node = this.fabricator.fabricate(
+                [this.serverToWorldX(x + blade.u), 0, this.serverToWorldZ(z + blade.v)],
+                GRASS_PREFAB, this.grassNode
+            );
+            node.eulerAngles = vec3.create(0, blade.yaw, 0);
+            vec3.set(blade.scale, blade.scale, blade.scale, node.scale);
+        }
+        this.grassCells++;
+        this.grassBlades += usados;
     }
 
     //Levanta o painel se a célula VIZINHA (nx,nz) for parede — fora do grid

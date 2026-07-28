@@ -38,6 +38,29 @@ export interface PipelineContext {
     objectBindGroupLayout: GPUBindGroupLayout;
 }
 
+/**
+ * Máscara de opacidade de um material, do ponto de vista de QUEM PROJETA
+ * SOMBRA. É a única coisa que um shadow pass precisa saber sobre um material:
+ * ele não ilumina, não texturiza, não faz blend — só decide, por fragmento, se
+ * aquele pedaço bloqueia luz ou não.
+ *
+ * Existe porque shadow map é DEPTH, e depth não tem meio-termo: um quad de
+ * grama com furos no alpha escreve profundidade no quad INTEIRO e projeta uma
+ * chapa retangular. O conserto é o shadow pass descartar o fragmento onde a
+ * máscara diz que não há folha — a sombra passa a ter o recorte da textura.
+ *
+ * Material opaco devolve undefined (o default) e continua desenhando no
+ * pipeline depth-only, sem fragment shader nenhum: o custo do recorte é pago
+ * SÓ por quem precisa dele.
+ */
+export interface ShadowAlphaMask {
+    /** View da textura cujo canal A é a máscara. */
+    view: GPUTextureView;
+    sampler: GPUSampler;
+    /** alpha < cutoff ⇒ fragmento descartado, não bloqueia luz. */
+    cutoff: number;
+}
+
 //Registry nome → instância de Material, no molde do registry de
 //behaviours: o createWorld registra suas instâncias ANTES do loadGltf,
 //e o loader usa a custom property "MaterialName" do Blender pra ligar
@@ -78,11 +101,42 @@ export abstract class Material {
     abstract getBindGroup(): GPUBindGroup;
 
     /**
+     * Máscara de opacidade pro shadow pass, ou undefined (default) se este
+     * material for opaco — ver ShadowAlphaMask.
+     *
+     * Devolve RECURSOS CRUS, não bind group: o layout do grupo de máscara é do
+     * shadow pass (é ele que escreve o shader que amostra), então é ele quem
+     * monta e cacheia o bind group. O material só declara "minha opacidade mora
+     * neste canal A, com este corte" e não fica sabendo de shadow map nenhum.
+     */
+    shadowAlphaMask(): ShadowAlphaMask | undefined {
+        return undefined;
+    }
+
+    /**
      * Libera os recursos de GPU DESTA instância (buffers, texturas).
      * O que é do TIPO (pipelines, shader modules, layouts em cache static)
      * fica — não tem destroy explícito em WebGPU e vale pra vida da app.
      */
     destroy(): void {}
+    private static whiteTexture: GPUTexture | null = null;
+    public static getWhiteTexture(device: GPUDevice): GPUTexture {
+        if (!this.whiteTexture) {
+            this.whiteTexture = device.createTexture({
+                label: "TexturedSkinnedPhong white 1x1",
+                size: [1, 1],
+                format: "rgba8unorm",
+                usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST,
+            });
+            device.queue.writeTexture(
+                { texture: this.whiteTexture },
+                new Uint8Array([255, 255, 255, 255]),
+                {},
+                { width: 1, height: 1 },
+            );
+        }
+        return this.whiteTexture;
+    }
 }
 
 //------------------------------------------------------------------------

@@ -50,7 +50,7 @@ public class ServerMessageSerializationTest {
     void mapSyncDescreveCadaCelula() {
         String json = mapper.writeValueAsString(new MapSync(2, 1, List.of(
             new MapCellDto("wall", "basicWall", Map.of()),
-            new MapCellDto("passable", "dirtGround", Map.of("grassSeed", "8f31c2")))));
+            new MapCellDto("passable", "dirtGround", Map.of("grassSeed", "1f8f31c2")))));
         System.out.println("mapSync: " + json);
         assertTrue(json.contains("\"operation\":\"mapSync\""));
         assertTrue(json.contains("\"w\":2"));
@@ -62,7 +62,7 @@ public class ServerMessageSerializationTest {
         assertTrue(json.contains("\"type\":\"dirtGround\""));
         //o extra que motivou o refactor inteiro: um monte de xz de grama
         //compactado numa string que o gerador do client expande
-        assertTrue(json.contains("\"grassSeed\":\"8f31c2\""));
+        assertTrue(json.contains("\"grassSeed\":\"1f8f31c2\""));
         assertTrue(!json.contains("\"extras\":{}")); //extras vazio não engorda o payload
     }
 

@@ -2,6 +2,7 @@ package net.dongeronimo.gauntlet.services;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
 import java.util.Random;
 
 import org.springframework.stereotype.Component;
@@ -15,8 +16,11 @@ import net.dongeronimo.gauntlet.entities.GameMap;
  * por construção — todo chão é alcançável a partir de qualquer chão (o teste
  * prova isso por BFS).
  *
- * O seed existe pra teste/reprodução SERVER-SIDE. Pro client o mapa é sempre
- * DADO (rows no mapSync), nunca seed — não existe procgen compartilhado.
+ * O seed do gerador existe pra teste/reprodução SERVER-SIDE e NUNCA sai daqui:
+ * pro client o mapa é sempre DADO (célula a célula no mapSync), não existe
+ * procgen compartilhado. Não confundir com a seed de GRAMA, que vai no fio: ela
+ * não regenera mapa nenhum, é só um valor pronto que o client desempacota pra
+ * decorar uma célula que ele já recebeu descrita.
  */
 @Component
 public class MapGenerator {
@@ -61,9 +65,9 @@ public class MapGenerator {
         //A 1ª tentativa nunca é rejeitada (mapa vazio), então rooms nunca é vazio.
 
         //2) Cava as salas. Chão é DIRT_GROUND por ora — quando existir variação
-        //   (grama, água...) é aqui que ela é escolhida, e a "decoração" que não
-        //   muda andabilidade (ex.: seed de grama) entra como extra da célula,
-        //   não como tipo novo.
+        //   de MATERIAL (água, lava...) é aqui que ela é escolhida. Decoração que
+        //   não muda andabilidade não vira tipo novo: entra como extra da célula,
+        //   depois que a geometria estiver pronta (a grama é a etapa 6).
         for (Room r : rooms) {
             for (int z = r.z(); z < r.z() + r.h(); z++)
                 for (int x = r.x(); x < r.x() + r.w(); x++)
@@ -104,7 +108,67 @@ public class MapGenerator {
         } else {
             map.putExtra(last.centerX() - 1, last.centerZ() - 1, GameMap.EXTRA_EXIT, "true");
         }
+
+        //6) Grama. Por último de propósito: a densidade depende da ABERTURA da
+        //   célula, que só existe depois de toda a geometria cavada. Cada chão de
+        //   terra ganha o extra grassSeed (densidade + seed empacotadas — ver
+        //   GameMap.EXTRA_GRASS_SEED); o client expande isso em N tufos sozinho.
+        for (int z = 0; z < HEIGHT; z++) {
+            for (int x = 0; x < WIDTH; x++) {
+                if (map.get(x, z).type() != CellType.DIRT_GROUND)
+                    continue;
+                int density = grassDensity(openness(map, x, z));
+                if (density == 0)
+                    continue; //sem grama é extra AUSENTE, não "00xxxxxx" no fio
+                int packed = (density << 24) | (cellHash(x, z, seed) & 0xFFFFFF);
+                map.putExtra(x, z, GameMap.EXTRA_GRASS_SEED,
+                    String.format(Locale.ROOT, "%08x", packed));
+            }
+        }
         return map;
+    }
+
+    /** Quantos dos 8 vizinhos (Moore) são andáveis. Fora do grid conta como
+     *  parede, igual em todo o resto do sistema (GameMap.isWalkable). Diagonal
+     *  entra na conta porque é o que diferencia "canto de sala" de "corredor". */
+    private int openness(GameMap map, int x, int z) {
+        int n = 0;
+        for (int dz = -1; dz <= 1; dz++)
+            for (int dx = -1; dx <= 1; dx++)
+                if ((dx != 0 || dz != 0) && map.isWalkable(x + dx, z + dz))
+                    n++;
+        return n;
+    }
+
+    /**
+     * Abertura (0..8) → densidade (0..255). QUADRÁTICA, não linear: perto de
+     * parede a grama some rápido e só engrossa em área aberta de verdade —
+     * corredor de 1 célula (abertura 2) dá 15, meio de sala (abertura 8) dá 255.
+     * Assim a silhueta da dungeon aparece na vegetação sem ninguém pintar grama
+     * à mão.
+     *
+     * Aritmética inteira de propósito: Math.pow só promete 1 ulp, e este número
+     * VAI PRO FIO — vale a pena ser bit-idêntico em qualquer JVM.
+     */
+    private static int grassDensity(int openness) {
+        return openness * openness * 255 / 64;
+    }
+
+    /**
+     * Hash 32-bit de (célula, seed do mapa) — a fonte da seed de cada tufo.
+     * POSICIONAL em vez de sorteado do `rng`: a grama de uma célula não pode
+     * mudar porque alguém mexeu em quantos sorteios as etapas anteriores fazem.
+     * Multiplicação de int em Java já tem wraparound, que é justamente o que faz
+     * o misturador espalhar os bits.
+     */
+    private static int cellHash(int x, int z, long seed) {
+        int h = (int) (seed ^ (seed >>> 32));
+        h ^= x * 0x27d4eb2d;
+        h ^= z * 0x165667b1;
+        h ^= h >>> 15; h *= 0x2c1b3c6d;
+        h ^= h >>> 12; h *= 0x297a2d39;
+        h ^= h >>> 15;
+        return h;
     }
 
     /** Cava linha horizontal inclusiva entre x1 e x2 (qualquer ordem). */
