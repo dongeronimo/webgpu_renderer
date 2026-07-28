@@ -209,7 +209,6 @@ export class TexturedOpaquePhong extends Material {
     private static shaderModule: GPUShaderModule | null = null;
     private static materialLayout: GPUBindGroupLayout | null = null;
     private static sampler: GPUSampler | null = null;
-    private static whiteTexture: GPUTexture | null = null;
     private static readonly pipelines = new Map<MeshType, GPURenderPipeline>();
 
     private static getMaterialBindGroupLayout(device: GPUDevice): GPUBindGroupLayout {
@@ -241,25 +240,9 @@ export class TexturedOpaquePhong extends Material {
         return this.sampler;
     }
 
-    //O elemento neutro do "textura × cor": branca 1×1 pro slot sem textura.
-    //É do TIPO (como os pipelines) e nunca é destruída — vale pra vida da app.
-    private static getWhiteTexture(device: GPUDevice): GPUTexture {
-        if (!this.whiteTexture) {
-            this.whiteTexture = device.createTexture({
-                label: "TexturedOpaquePhong white 1x1",
-                size: [1, 1],
-                format: "rgba8unorm",
-                usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST,
-            });
-            device.queue.writeTexture(
-                { texture: this.whiteTexture },
-                new Uint8Array([255, 255, 255, 255]),
-                {},
-                { width: 1, height: 1 },
-            );
-        }
-        return this.whiteTexture;
-    }
+    //A branca 1×1 (elemento neutro do "textura × cor") subiu pra Material:
+    //TexturedSkinnedPhong e GrassMaterial precisam da mesma, e três cópias
+    //seriam três texturas idênticas na GPU. Ver Material.getWhiteTexture.
 
     private static createPipeline(ctx: PipelineContext, meshType: MeshType): GPURenderPipeline {
         const { device } = ctx;
@@ -326,7 +309,7 @@ export class TexturedOpaquePhong extends Material {
             usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
         });
 
-        const white = TexturedOpaquePhong.getWhiteTexture(device);
+        const white = Material.getWhiteTexture(device);
         if (options.diffuseTexture) this.ownedTextures.push(options.diffuseTexture);
         if (options.specularTexture) this.ownedTextures.push(options.specularTexture);
         this.bindGroup = device.createBindGroup({

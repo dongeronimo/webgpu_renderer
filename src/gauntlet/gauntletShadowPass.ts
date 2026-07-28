@@ -29,7 +29,7 @@ import { Node } from "../node";
 import { gpuTimer } from "../gpuTimer";
 import { RenderPassBit } from "../renderable";
 import type { Mesh } from "../mesh";
-import { StaticMesh, SkinnedMesh } from "../mesh";
+import { MeshType, StaticMesh, SkinnedMesh } from "../mesh";
 import type { Skin } from "../skin";
 import type { Material } from "../material";
 import { FrustumCuller } from "../frustumCuller";
@@ -205,14 +205,22 @@ export class GauntletShadowPass {
     private readonly frameBindGroupLayout: GPUBindGroupLayout;
     private readonly staticObjectBindGroupLayout: GPUBindGroupLayout;
     private readonly skinnedObjectBindGroupLayout: GPUBindGroupLayout;
-    private readonly staticPipeline: GPURenderPipeline;
+    //Família ESTÁTICA (grupo 1 = model matrix), indexada por tipo de mesh e
+    //construída sob demanda. Por tipo de mesh porque "desenha com model matrix"
+    //e "tem joints/weights no vértice" são perguntas INDEPENDENTES: a grama é
+    //rígida mas o glb dela ainda exporta armature, então a mesh é Skinned e o
+    //stride é outro. Um pipeline com o vertex layout errado não dá erro — lê os
+    //atributos em offsets trocados e desenha lixo.
+    private readonly staticPipelines = new Map<MeshType, GPURenderPipeline>();
+    private readonly staticMaskedPipelines = new Map<MeshType, GPURenderPipeline>();
+    //Família SKINNADA (grupo 1 = pool de poses): só existe pra SkinnedMesh,
+    //então não precisa de mapa.
     private readonly skinnedPipeline: GPURenderPipeline;
     //Variantes com recorte de opacidade: mesmas famílias, mais o grupo 2 e o
     //fragment shader do discard. São pipelines SEPARADOS (e não um uber-shader
     //com flag) porque quem é opaco não deve pagar amostragem de textura nenhuma
     //no shadow map — que é justamente a dungeon inteira.
     private readonly alphaMaskBindGroupLayout: GPUBindGroupLayout;
-    private readonly staticMaskedPipeline: GPURenderPipeline;
     private readonly skinnedMaskedPipeline: GPURenderPipeline;
     //Um MaskSlot por material mascarado, montado na primeira vez que ele
     //aparece. Chave é o próprio Material: instâncias diferentes têm texturas e
@@ -246,27 +254,6 @@ export class GauntletShadowPass {
             ],
         });
 
-        const staticModule = device.createShaderModule({ label: "gauntlet shadow static", code: STATIC_SHADOW_WGSL });
-        this.staticPipeline = device.createRenderPipeline({
-            label: "gauntlet shadow static",
-            layout: device.createPipelineLayout({
-                label: "gauntlet shadow static pipeline layout",
-                bindGroupLayouts: [this.frameBindGroupLayout, this.staticObjectBindGroupLayout],
-            }),
-            vertex: { module: staticModule, entryPoint: "vs", buffers: [StaticMesh.vertexLayout] },
-            //sem fragment: pass só-de-depth, não precisa rasterizar cor
-            primitive: { topology: "triangle-list", cullMode: "back" },
-            depthStencil: {
-                format: SHADOW_DEPTH_FORMAT,
-                depthWriteEnabled: true,
-                depthCompare: "less",
-                //bias fixo pra evitar shadow acne sem precisar de bias manual
-                //no fragment shader do main (que só faz a comparação).
-                depthBias: 2,
-                depthBiasSlopeScale: 2,
-            },
-        });
-
         const skinnedModule = device.createShaderModule({ label: "gauntlet shadow skinned", code: SKINNED_SHADOW_WGSL });
         this.skinnedPipeline = device.createRenderPipeline({
             label: "gauntlet shadow skinned",
@@ -293,10 +280,49 @@ export class GauntletShadowPass {
                 { binding: 2, visibility: GPUShaderStage.FRAGMENT, buffer: { type: "uniform" } },
             ],
         });
-        this.staticMaskedPipeline = this.createMaskedPipeline(
-            "static", STATIC_MASKED_SHADOW_WGSL, StaticMesh.vertexLayout, this.staticObjectBindGroupLayout);
         this.skinnedMaskedPipeline = this.createMaskedPipeline(
             "skinned", SKINNED_MASKED_SHADOW_WGSL, SkinnedMesh.vertexLayout, this.skinnedObjectBindGroupLayout);
+    }
+
+    /** Pipeline da família ESTÁTICA pra este tipo de mesh, com ou sem recorte —
+     *  construído na primeira vez que a combinação aparece. Na prática são no
+     *  máximo 4, e hoje a cena usa 2 (dungeon opaca em StaticMesh, grama
+     *  recortada em SkinnedMesh por causa do glb). */
+    private staticPipelineFor(meshType: MeshType, masked: boolean): GPURenderPipeline {
+        const cache = masked ? this.staticMaskedPipelines : this.staticPipelines;
+        let pipeline = cache.get(meshType);
+        if (pipeline) return pipeline;
+        const vertexLayout = meshType === MeshType.Skinned
+            ? SkinnedMesh.vertexLayout
+            : StaticMesh.vertexLayout;
+        pipeline = masked
+            ? this.createMaskedPipeline(
+                `static ${MeshType[meshType]}`, STATIC_MASKED_SHADOW_WGSL, vertexLayout, this.staticObjectBindGroupLayout)
+            : this.device.createRenderPipeline({
+                label: `gauntlet shadow static ${MeshType[meshType]}`,
+                layout: this.device.createPipelineLayout({
+                    label: "gauntlet shadow static pipeline layout",
+                    bindGroupLayouts: [this.frameBindGroupLayout, this.staticObjectBindGroupLayout],
+                }),
+                vertex: {
+                    module: this.device.createShaderModule({ label: "gauntlet shadow static", code: STATIC_SHADOW_WGSL }),
+                    entryPoint: "vs",
+                    buffers: [vertexLayout],
+                },
+                //sem fragment: pass só-de-depth, não precisa rasterizar cor
+                primitive: { topology: "triangle-list", cullMode: "back" },
+                depthStencil: {
+                    format: SHADOW_DEPTH_FORMAT,
+                    depthWriteEnabled: true,
+                    depthCompare: "less",
+                    //bias fixo pra evitar shadow acne sem precisar de bias manual
+                    //no fragment shader do main (que só faz a comparação).
+                    depthBias: 2,
+                    depthBiasSlopeScale: 2,
+                },
+            });
+        cache.set(meshType, pipeline);
+        return pipeline;
     }
 
     private createMaskedPipeline(
@@ -393,7 +419,10 @@ export class GauntletShadowPass {
         const staticItems: StaticShadowItem[] = [];
         const skinnedItems: SkinnedShadowItem[] = [];
         const collect = (node: Node) => {
-            if (node.renderable) {
+            //castsShadow ANTES do worldAABB: quem não projeta nem paga o cull
+            //(que aloca). Com milhares de tufos de grama × um mapa por luz, é o
+            //teste mais barato que existe aqui e o que mais poda.
+            if (node.renderable && node.renderable.castsShadow) {
                 const aabb = node.renderable.worldAABB(node.worldMatrix);
                 if (this.cullScratch.intersectsAABB(aabb.min, aabb.max, SHADOW_CULL_MARGIN)) {
                     //O material entra aqui SÓ pra responder "você tem furos?".
@@ -498,11 +527,13 @@ export class GauntletShadowPass {
         //dungeon inteira (centenas de paredes iguais) deixa de custar centenas
         //de draws POR LUZ, e os milhares de tufos de grama, um draw só.
         if (staticItems.length) {
-            this.drawRuns(pass, staticItems, slot.staticBindGroup, this.staticPipeline, this.staticMaskedPipeline);
+            this.drawRuns(pass, staticItems, slot.staticBindGroup,
+                (mask, mesh) => this.staticPipelineFor(mesh.type, mask !== null));
         }
         if (skinnedItems.length) {
             //cada instância acha o esqueleto dela por boneOffsets[instance_index]
-            this.drawRuns(pass, skinnedItems, slot.skinnedBindGroup, this.skinnedPipeline, this.skinnedMaskedPipeline);
+            this.drawRuns(pass, skinnedItems, slot.skinnedBindGroup,
+                (mask) => (mask ? this.skinnedMaskedPipeline : this.skinnedPipeline));
         }
         pass.end();
     }
@@ -521,8 +552,7 @@ export class GauntletShadowPass {
         pass: GPURenderPassEncoder,
         items: { mesh: Mesh; mask: MaskSlot | null }[],
         objectBindGroup: GPUBindGroup,
-        opaquePipeline: GPURenderPipeline,
-        maskedPipeline: GPURenderPipeline,
+        pipelineFor: (mask: MaskSlot | null, mesh: Mesh) => GPURenderPipeline,
     ): void {
         let boundPipeline: GPURenderPipeline | null = null;
         let start = 0;
@@ -532,7 +562,7 @@ export class GauntletShadowPass {
             while (end < items.length && items[end].mesh === mesh && items[end].mask === mask) {
                 end++;
             }
-            const pipeline = mask ? maskedPipeline : opaquePipeline;
+            const pipeline = pipelineFor(mask, mesh);
             if (pipeline !== boundPipeline) {
                 pass.setPipeline(pipeline);
                 //Religa o grupo de objeto junto com o pipeline. Os layouts dos

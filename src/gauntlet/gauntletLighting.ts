@@ -53,6 +53,29 @@ export const SHADOW_MAP_MAX_SIZE = 8192;
 const SPOT_SHADOW_NEAR = 0.5;
 const SPOT_SHADOW_FAR = 60;
 
+/**
+ * Meia-largura, em unidades de mundo, da caixa ortho do shadow map do
+ * directional, centrada no que a câmera está olhando (ver
+ * computeDirectionalShadowViewProj). 24 = caixa de 48×48.
+ *
+ * O ortho ANTES cobria a dungeon inteira (64×64), o que gastava a resolução do
+ * mapa quase toda em canto de mapa que ninguém está vendo. Como a luz é
+ * PARALELA, encolher e transladar a caixa não muda a direção de raio nenhum:
+ * muda só onde existe dado de sombra e com que densidade. O texel cai de
+ * 64/size pra 48/size — e o shadow pass, que já culla contra o frustum da luz,
+ * passa a coletar e ordenar muito menos item por frame.
+ *
+ * O tamanho é FIXO de propósito, nunca refitado por frame: caixa que muda de
+ * tamanho faz a sombra inteira pulsar. Com a câmera do Gauntlet (offset fixo,
+ * sem giro), a região visível é uma forma constante e só a translação muda,
+ * então um raio fixo cobre bem. Aumente se a câmera afastar; sombra sumindo na
+ * borda da tela é o sintoma de estar curto demais.
+ */
+const DIRECTIONAL_SHADOW_RADIUS = 24;
+//Até onde procurar o chão na frente da câmera, quando ela é rasa demais pra
+//cruzar y=0 num ponto útil (ver cameraGroundFocus).
+const CAMERA_FOCUS_MAX_DISTANCE = 60;
+
 export class GauntletLighting {
     readonly frameBindGroupLayout: GPUBindGroupLayout;
     /**
@@ -263,7 +286,11 @@ export class GauntletLighting {
         //Matrizes luz→clip de sombra: calculadas ANTES de gravar os storage
         //buffers (writeSpot/writeDirectional gravam a matriz no lugar).
         this.spotShadowViewProj = visibleSpots.map((n) => this.computeSpotShadowViewProj(n));
-        this.directionalShadowViewProj = directionals.map((n) => this.computeDirectionalShadowViewProj(n));
+        //A caixa do directional segue a câmera. Sem câmera (caso degenerado)
+        //cai no comportamento antigo, cena inteira — melhor sombra grosseira
+        //que sombra nenhuma.
+        const shadowFocus = cameraNode ? cameraGroundFocus(cameraNode) : null;
+        this.directionalShadowViewProj = directionals.map((n) => this.computeDirectionalShadowViewProj(n, shadowFocus));
 
         let bindGroupDirty = false;
         if (visiblePoints.length > this.pointCapacity) { this.growPointBuffer(visiblePoints.length); bindGroupDirty = true; }
@@ -296,13 +323,30 @@ export class GauntletLighting {
         return mat4.multiply(proj, view);
     }
 
-    //Câmera de sombra do directional: não tem posição própria (fonte
-    //infinitamente distante), então a "câmera" é sintética — colocada atrás
-    //do CENTRO da cena, na direção oposta à da luz, longe o bastante pra
-    //nunca ficar DENTRO da caixa. O ortho é então fitado nos 8 cantos do
-    //AABB transformados pro espaço de view (mesma técnica de
-    //Renderable.worldAABB, só que mundo→luz em vez de local→mundo).
-    private computeDirectionalShadowViewProj(node: Node): Mat4 {
+    /**
+     * Câmera de sombra do directional: não tem posição própria (fonte
+     * infinitamente distante), então a "câmera" é sintética — colocada atrás do
+     * CENTRO DA CENA, na direção oposta à da luz, longe o bastante pra nunca
+     * ficar DENTRO da caixa.
+     *
+     * O eye é ancorado na cena, e NÃO na câmera do player, de propósito: assim a
+     * matriz de view é a mesma todo frame, e as coordenadas de um ponto de mundo
+     * no espaço da luz não mudam quando o player anda. É isso que faz o snap de
+     * texel lá embaixo funcionar — snap contra um referencial móvel não
+     * estabiliza nada.
+     *
+     * Os eixos da caixa saem de duas fontes diferentes, e a assimetria é o
+     * ponto:
+     *  - X e Y (perpendiculares à luz): APERTADOS em volta do que a câmera está
+     *    olhando, porque é só ali que a sombra vai ser vista. É a economia toda.
+     *  - Z (ao longo da luz): a CENA INTEIRA. Se apertasse aqui também, sumiria
+     *    o caster que está entre o sol e a área visível — a parede fora de
+     *    quadro que projeta sombra pra dentro dele. Esticar em profundidade não
+     *    custa texel nenhum, só range de depth.
+     *
+     * `focus` null = sem câmera: cai no comportamento antigo (cena inteira).
+     */
+    private computeDirectionalShadowViewProj(node: Node, focus: Vec3 | null): Mat4 {
         const dir = forward(node.worldMatrix);
         const min = this.sceneBoundsMin;
         const max = this.sceneBoundsMax;
@@ -315,8 +359,10 @@ export class GauntletLighting {
         );
         const view = mat4.invert(mat4.cameraAim(eye, center, safeUp(dir)));
 
-        let minX = Infinity, minY = Infinity, minZ = Infinity;
-        let maxX = -Infinity, maxY = -Infinity, maxZ = -Infinity;
+        //Os 8 cantos do AABB da cena no espaço da luz (mesma técnica de
+        //Renderable.worldAABB, só que mundo→luz em vez de local→mundo).
+        let sceneMinX = Infinity, sceneMinY = Infinity, minZ = Infinity;
+        let sceneMaxX = -Infinity, sceneMaxY = -Infinity, maxZ = -Infinity;
         for (let c = 0; c < 8; c++) {
             const x = (c & 1) ? max[0] : min[0];
             const y = (c & 2) ? max[1] : min[1];
@@ -324,8 +370,34 @@ export class GauntletLighting {
             const vx = view[0] * x + view[4] * y + view[8] * z + view[12];
             const vy = view[1] * x + view[5] * y + view[9] * z + view[13];
             const vz = view[2] * x + view[6] * y + view[10] * z + view[14];
-            if (vx < minX) minX = vx; if (vy < minY) minY = vy; if (vz < minZ) minZ = vz;
-            if (vx > maxX) maxX = vx; if (vy > maxY) maxY = vy; if (vz > maxZ) maxZ = vz;
+            if (vx < sceneMinX) sceneMinX = vx; if (vy < sceneMinY) sceneMinY = vy; if (vz < minZ) minZ = vz;
+            if (vx > sceneMaxX) sceneMaxX = vx; if (vy > sceneMaxY) sceneMaxY = vy; if (vz > maxZ) maxZ = vz;
+        }
+
+        let minX = sceneMinX, maxX = sceneMaxX, minY = sceneMinY, maxY = sceneMaxY;
+        if (focus) {
+            //Foco no espaço da luz. Só X e Y interessam: Z já veio da cena.
+            const fx = view[0] * focus[0] + view[4] * focus[1] + view[8] * focus[2] + view[12];
+            const fy = view[1] * focus[0] + view[5] * focus[1] + view[9] * focus[2] + view[13];
+            //SNAP a múltiplos de texel. Sem isto, o deslocamento sub-texel da
+            //caixa faz os texels do mapa deslizarem sobre a geometria parada e
+            //as bordas de sombra FERVEM a cada frame — e o defeito piora quanto
+            //melhor a resolução, porque o texel fica menor. Arredondar o centro
+            //pro grid faz a caixa andar de texel em texel: o conteúdo do mapa
+            //translada em bloco, sem reamostrar.
+            const texel = (2 * DIRECTIONAL_SHADOW_RADIUS) / this.shadowMapSize;
+            const snappedX = Math.round(fx / texel) * texel;
+            const snappedY = Math.round(fy / texel) * texel;
+            //A caixa NÃO é clampada ao AABB da cena, mesmo perto da borda do
+            //mapa. Clampar mudaria a EXTENSÃO de frame pra frame, e aí o texel
+            //real deixaria de bater com o grid usado no snap acima — o
+            //shimmering voltaria justamente na borda. E não economizaria nada:
+            //texel sobre o vazio não rasteriza coisa nenhuma. Extensão
+            //constante é o que faz o snap valer.
+            minX = snappedX - DIRECTIONAL_SHADOW_RADIUS;
+            maxX = snappedX + DIRECTIONAL_SHADOW_RADIUS;
+            minY = snappedY - DIRECTIONAL_SHADOW_RADIUS;
+            maxY = snappedY + DIRECTIONAL_SHADOW_RADIUS;
         }
         //view-space -Z é "na frente" (convenção do engine inteiro): maxZ
         //(menos negativo) é o corner mais PERTO da câmera sintética, minZ o
@@ -519,6 +591,25 @@ function forward(m: Mat4): [number, number, number] {
 function worldPosition(node: Node): Vec3 {
     const w = node.worldMatrix;
     return vec3.create(w[12], w[13], w[14]);
+}
+
+/**
+ * Ponto do CHÃO (y=0, onde mora o piso da dungeon) pra onde a câmera olha — o
+ * centro da caixa de sombra do directional.
+ *
+ * É o chão, e não a posição da câmera, porque é no chão que a sombra é vista:
+ * centrar na câmera gastaria metade da caixa no ar acima do mapa. Câmera rasa
+ * demais pra cruzar y=0 (ou olhando pra cima) não tem interseção útil, e aí um
+ * ponto à frente a uma distância fixa é o melhor palpite disponível.
+ */
+function cameraGroundFocus(cam: Node): Vec3 {
+    const m = cam.worldMatrix;
+    const dir = forward(m); //-Z, a convenção de câmera do engine
+    const eyeY = m[13];
+    //dir[1] < 0 = olhando pra baixo; o limiar evita divisão por ~0 na horizontal
+    const t = dir[1] < -1e-3 ? -eyeY / dir[1] : CAMERA_FOCUS_MAX_DISTANCE;
+    const d = Math.min(Math.max(t, 0), CAMERA_FOCUS_MAX_DISTANCE);
+    return vec3.create(m[12] + dir[0] * d, m[13] + dir[1] * d, m[14] + dir[2] * d);
 }
 
 //Up seguro pra cameraAim: se a direção já está quase paralela a (0,1,0), usar

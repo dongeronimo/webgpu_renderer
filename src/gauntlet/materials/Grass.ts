@@ -1,5 +1,5 @@
 import { Material, PipelineContext } from "../../material";
-import { MeshType, SkinnedMesh } from "../../mesh";
+import { MeshType, SkinnedMesh, StaticMesh } from "../../mesh";
 import { BIND_GROUP_0_LIGHT_SETS, LIGHT_STRUCTS } from "./shader_includes/lights";
 import { SHADOW_FACTOR } from "./shader_includes/shadows";
 const GRASS_WGSL = /* wgsl */ `
@@ -14,17 +14,24 @@ ${BIND_GROUP_0_LIGHT_SETS}
 @group(0) @binding(4) var spotShadowMap: texture_depth_2d_array;
 @group(0) @binding(5) var directionalShadowMap: texture_depth_2d_array;
 @group(0) @binding(6) var shadowSampler: sampler_comparison;
-//Grupo 1 = o pool plano de matrizes de skinning + a tabela de bases por
-//instância (mesmo layout de SkinnedPhongMaterial — quem desenha isto SEMPRE é
-//o GauntletSkinnedRenderPass), não ObjectData{model,normalMatrix}.
-@group(1) @binding(0) var<storage, read> poses: array<mat4x4f>;
-@group(1) @binding(1) var<storage, read> boneOffsets: array<u32>;
+//Grupo 1 = ObjectData{model, normalMatrix}, o mesmo do TexturedOpaquePhong:
+//quem desenha isto é o GauntletMainRenderPass. ERA o pool de poses de skinning
+//— ver o comentário da classe pra por que deixou de ser.
+struct ObjectData {
+    model: mat4x4f,
+    normalMatrix: mat4x4f,
+};
+@group(1) @binding(0) var<storage, read> objects: array<ObjectData>;
 
 struct MaterialParams {
     diffuseColor: vec4f,
     specularColor: vec3f,
     shininess: f32,
     ambient: vec3f,
+    //alpha < isto = fragmento descartado. MESMO valor que vai pro shadow map
+    //(ver shadowAlphaMask): silhueta e sombra têm que concordar sobre onde há
+    //folha, senão a sombra não bate com o tufo que a projeta.
+    alphaCutoff: f32,
 }
 @group(2) @binding(0) var<uniform> material: MaterialParams;
 @group(2) @binding(1) var texSampler: sampler;
@@ -40,39 +47,38 @@ struct VsOut {
     @location(1) worldPosition: vec3f,
     @location(2) uv: vec2f,
 };
-// VERTEX SHADER - é aqui que a gente aplica a skin. Mantenha em mente que toda renderização 
-// no nosso renderer é instanciada e que a gente precisa saber o offset da instancia atual
-// nos buffers.
+// VERTEX SHADER - rígido. Toda renderização no nosso renderer é instanciada, e
+// cada tufo pega a matriz dele por instance_index. É aqui que a animação de
+// vento vai entrar um dia: deslocar a position em função da altura do vértice
+// (o v do uv serve de peso) e do tempo, sem osso nenhum — é assim que o
+// artigo do GPU Gems faz.
 @vertex
 fn vs(
     @location(0) position: vec3f,
     @location(1) normal: vec3f,
     @location(2) uv: vec2f,
-    @location(3) joints: vec4<u32>,
-    @location(4) weights: vec4f,
     @builtin(instance_index) instance: u32,
 ) -> VsOut {
-    let base = boneOffsets[instance];  ///o começo dos ossos dessa instância
-    //transform dos ossos
-    let m = 
-        poses[base + joints.x] * weights.x +
-        poses[base + joints.y] * weights.y +
-        poses[base + joints.z] * weights.z +
-        poses[base + joints.w] * weights.w ;
-    // a world de um pass skinned é a soma ponderada das matrizes das poses dos ossos, n tem uma
-    // "world" explícita como a dos static mesh.    
-    let worldPos = m * vec4f(position, 1.0);
+    let worldPos = objects[instance].model * vec4f(position, 1.0);
     var out: VsOut;
     out.worldPosition = worldPos.xyz;
-    out.worldNormal = (m * vec4f(normal, 0.0)).xyz;
+    //normal é DIREÇÃO (w=0) e vai pela normalMatrix = transpose(inverse(model)),
+    //que preserva perpendicularidade sob escala não-uniforme
+    out.worldNormal = (objects[instance].normalMatrix * vec4f(normal, 0.0)).xyz;
     out.position = frame.proj * frame.view * worldPos;
     out.uv = uv;
     return out;
 }
-// FRAGMENT SHADER - Basicamente igual ao do TexturedSkinnedPhong exceto no final, onde 
-// a gente usa o alphaMap.
+// FRAGMENT SHADER - Basicamente igual ao do TexturedSkinnedPhong exceto no
+// começo, onde a gente RECORTA pelo alphaMap.
 @fragment
 fn fs(in: VsOut) -> @location(0) vec4f {
+    //Recorte, não blend: o fragmento existe inteiro ou não existe. Vem ANTES da
+    //iluminação de propósito — o que foi descartado não paga luz nenhuma, e com
+    //milhares de tufos isso é a maior parte dos fragmentos.
+    if (textureSample(alphaTex, texSampler, in.uv).a < material.alphaCutoff) {
+        discard;
+    }
     let albedo = textureSample(diffuseTex, texSampler, in.uv) * material.diffuseColor;
     let specTint = textureSample(specularTex, texSampler, in.uv).rgb * material.specularColor;
 
@@ -123,9 +129,8 @@ fn fs(in: VsOut) -> @location(0) vec4f {
     }
 
     let litColor = material.ambient * albedo.rgb + diffuse * albedo.rgb + specular * specTint;
-    //opacidade vem do alpha map.
-    let alpha = textureSample(alphaTex, texSampler, in.uv);
-    return vec4f(litColor, alpha.a);
+    //alpha 1: quem chegou até aqui passou no recorte lá em cima e é opaco.
+    return vec4f(litColor, 1.0);
 }
 `;
 /**
@@ -145,22 +150,32 @@ export interface GrassMaterialOptions {
     /** Expoente de brilho (shininess): maior = brilho mais concentrado. */
     shininess?: number;
     ambient?: [number, number, number];
-    /** Abaixo deste alpha o fragmento não bloqueia luz no shadow map (default
-     *  0.5) — ver shadowAlphaMask(). Mais alto = sombra mais rala (só o miolo
-     *  opaco da folha projeta); mais baixo = sombra mais cheia, e a franja
-     *  antialiasada da textura vira sombra sólida. */
-    shadowAlphaCutoff?: number;
+    /** Abaixo deste alpha o fragmento é DESCARTADO (default 0.5) — tanto ao
+     *  desenhar quanto ao projetar sombra, é o mesmo valor nos dois (ver
+     *  shadowAlphaMask). Mais alto = folha mais fina, e a franja antialiasada da
+     *  textura some; mais baixo = folha mais cheia, com a franja virando borda
+     *  dura. É o knob que troca "grama rala e limpa" por "grama cheia e
+     *  serrilhada". */
+    alphaCutoff?: number;
 }
 /**
- * Material do grass, baseado no 
+ * Material do grass, baseado no
  * https://developer.nvidia.com/gpugems/gpugems/part-i-natural-effects/chapter-7-rendering-countless-blades-waving-grass
- * A alteração que eu farei em relação ao que o artigo propões é o grass ter sua deformação
- * controlada por skin.
- * 
- * O material tem uma textura difuse e uma textura de alpha channel.
- * 
- * Então esse material tem que ser usado no pass de skin (blending é responsabilidade da pipeline,
- * não do renderpass) 
+ *
+ * O material tem uma textura diffuse e uma textura de alpha channel, e desenha
+ * no GauntletMainRenderPass como qualquer mesh RÍGIDA.
+ *
+ * ERA SKINNADO, e não é mais. A ideia tinha sido usar skin pra deformar a folha
+ * no vento, mas o artigo não faz isso e o preço apareceu na conta: cada tufo
+ * virava uma Armature inteira (armature + 3 ossos + o nó da mesh = 5 nodes) e
+ * 3600 tufos viravam ~18 mil nodes percorridos todo frame, cada um com pose
+ * recalculada e reenviada — no skinned pass E no shadow pass, por luz — pra uma
+ * pose que nunca mudava, já que nenhum clip anima a grama. Rígido, é 1 node por
+ * tufo, sem pool de poses nenhum. A animação de vento volta pelo vertex shader
+ * (ver o comentário no vs), que é como o artigo faz e não custa node nenhum.
+ *
+ * Transparência é por RECORTE (discard), não por blend — ver o fragment shader
+ * e o pipeline.
 */
 export class GrassMaterial extends Material {
     /// O shader compilado, que nem o vkShaderModule.
@@ -201,7 +216,7 @@ export class GrassMaterial extends Material {
         return this.sampler;
     }
 
-    private static createPipeline(ctx: PipelineContext): GPURenderPipeline {
+    private static createPipeline(ctx: PipelineContext, meshType: MeshType): GPURenderPipeline {
         const {device} = ctx;
         // Lazy-initialize do shader module
         if(!this.shaderModule) {
@@ -210,8 +225,16 @@ export class GrassMaterial extends Material {
                 code: GRASS_WGSL
             });
         }
+        //Os dois layouts são aceitos porque o shader só lê position/normal/uv
+        //(locations 0,1,2), que existem em ambos. O grass00.glb ainda exporta
+        //JOINTS_0/WEIGHTS_0 do tempo do skinning, então o loader ainda entrega
+        //SkinnedMesh — e o stride é diferente, então o layout TEM que
+        //acompanhar. Reexportar sem armature faz cair no ramo Static sozinho.
+        const vertexLayout = meshType === MeshType.Skinned
+            ? SkinnedMesh.vertexLayout
+            : StaticMesh.vertexLayout;
         return device.createRenderPipeline({
-            label: "GrassMaterial pipeline",
+            label: `GrassMaterial pipeline (${MeshType[meshType]})`,
             layout: device.createPipelineLayout({
                 label: "GrassMaterial pipeline layout",
                 bindGroupLayouts: [
@@ -221,22 +244,22 @@ export class GrassMaterial extends Material {
                 ],
             }),
             vertex: {
-                module: this.shaderModule, 
+                module: this.shaderModule,
                 entryPoint: "vs",
-                buffers: [SkinnedMesh.vertexLayout]
+                buffers: [vertexLayout]
             },
+            //SEM blend: o recorte no fragment já resolveu a transparência, e o
+            //resultado é opaco. É o que permite a grama viver no
+            //GauntletMainRenderPass, que reordena os draws livremente por
+            //(pipeline, material, mesh) — reordenar com blend ligado seria bug
+            //de corretude, não otimização.
             fragment: {
                 module: this.shaderModule,
                 entryPoint: "fs",
-                targets: [
-                    {
-                        format: ctx.colorFormat,
-                        blend: {
-                            color: { srcFactor: "src-alpha", dstFactor: "one-minus-src-alpha" },
-                            alpha: { srcFactor: "one", dstFactor: "one-minus-src-alpha" },
-                        }
-                    }]
+                targets: [{ format: ctx.colorFormat }]
             },
+            //"none" porque folha é quad de duas faces: com back-culling, metade
+            //dos tufos desaparece dependendo do yaw sorteado pelo gerador.
             primitive: {topology: "triangle-list", cullMode: "none"},
             depthStencil: {
                 format: ctx.depthFormat,
@@ -255,7 +278,7 @@ export class GrassMaterial extends Material {
     //shader usa pra compor, agora servindo de recorte no shadow map. Uma fonte
     //de verdade só — sombra e silhueta não podem discordar sobre onde tem folha.
     private readonly alphaView: GPUTextureView;
-    private readonly shadowAlphaCutoff: number;
+    private readonly alphaCutoff: number;
 
     constructor(device: GPUDevice, options:GrassMaterialOptions){
         super();
@@ -285,12 +308,15 @@ export class GrassMaterial extends Material {
             ]
         });
         this.alphaView = options.alphaTexture.createView();
-        this.shadowAlphaCutoff = options.shadowAlphaCutoff ?? 0.5;
+        this.alphaCutoff = options.alphaCutoff ?? 0.5;
         //seta os parâmetros do material
         this.params.set(options.diffuseColor ?? [1, 1, 1, 1], 0);
         this.params.set(options.specularColor ?? [1, 1, 1], 4);
         this.params[7] = options.shininess ?? 32;
         this.params.set(options.ambient ?? [0.03, 0.03, 0.03], 8);
+        //índice 11 era padding do vec3f ambient — o cutoff coube nele sem
+        //crescer o buffer (vec3f alinha em 16, o f32 seguinte mora no 4º slot)
+        this.params[11] = this.alphaCutoff;
         this.upload();
     }
 
@@ -328,12 +354,9 @@ export class GrassMaterial extends Material {
     private static readonly pipelines = new Map<MeshType, GPURenderPipeline>();
     
     getPipeline(ctx: PipelineContext, meshType: MeshType): GPURenderPipeline {
-        if (meshType !== MeshType.Skinned) {
-            throw new Error("GrassMaterial só desenha meshes Skinned.");
-        }
         let pipeline = GrassMaterial.pipelines.get(meshType);
         if (!pipeline) {
-            pipeline = GrassMaterial.createPipeline(ctx);
+            pipeline = GrassMaterial.createPipeline(ctx, meshType);
             GrassMaterial.pipelines.set(meshType, pipeline);
         }
         return pipeline;
@@ -355,7 +378,7 @@ export class GrassMaterial extends Material {
         return {
             view: this.alphaView,
             sampler: GrassMaterial.getSampler(this.device),
-            cutoff: this.shadowAlphaCutoff,
+            cutoff: this.alphaCutoff,
         };
     }
 

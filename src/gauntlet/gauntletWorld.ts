@@ -152,11 +152,17 @@ export class GauntletWorld extends World implements PrefabFabricator {
                 shininess:32
             }
         )
+        //ambient 0.15, não o default 0.03: o ambient MULTIPLICA o albedo (ver
+        //TexturedOpaquePhong), então 0.03 põe tudo que está em sombra a 3% da
+        //textura — praticamente preto. Com contraste desse tamanho, qualquer
+        //artefato de shadow map vira o elemento mais visível da tela. 0.15 é o
+        //bastante pra ler a textura na sombra sem lavar a iluminação direta.
         const dirt = new TexturedOpaquePhong(
             this.device, {
                 diffuseColor: [1,1,1,1],
                 diffuseTexture: await loadTexture(this.device, "/textures/Dirt_02.png"),
-                shininess: 16
+                shininess: 16,
+                ambient: [0.15, 0.15, 0.15]
             }
         )
 
@@ -165,7 +171,11 @@ export class GauntletWorld extends World implements PrefabFabricator {
                 diffuseTexture: await loadTexture(this.device, "/textures/grass_diffuse.png"),
                 alphaTexture: await loadTexture(this.device, "/textures/grass_alpha.png"),
                 shininess: 16,
-                diffuseColor: [1,1,1,1]
+                diffuseColor: [1,1,1,1],
+                //mesmo motivo do dirt acima — e aqui pesa em dobro: a grama
+                //RECEBE sombra do sol e é o objeto mais fragmentado da cena,
+                //então é onde o contraste alto mais aparece.
+                ambient: [0.15, 0.15, 0.15]
             }
         )
         //TexturedSkinnedPhong, não TexturedOpaquePhong: Dmitry/Nat são meshes
@@ -384,18 +394,31 @@ export class GauntletWorld extends World implements PrefabFabricator {
      * O material será sempre o grass00, pq ele é o material especial pra gramas.
      */
     private async loadGrass() {
-        debugger;
-        const {roots, nodes, meshes, skins} = await loadGltf(this.device, "/models/grass00.glb");
+        const {nodes, meshes} = await loadGltf(this.device, "/models/grass00.glb");
         this.meshes.push(...meshes);
-        nodes.filter(n=>n.renderable && n.skin).forEach(n=>{
-            n.renderable!.passMask = RenderPassBit.Skinned; //TODO: um dia fazer um pass exclusivo pra grama
-            n.renderable!.material = getMaterial("grass");
-        });
-        const armature = roots.find(n=>n.name === "Armature");
-        if(!armature) throw new Error(`Nó armature n encontrado no grass`);
-        armature.setParent(null);
-        const prefab = Prefab.fromTemplate(armature, "grass00");
-        this.prefabs.set("grass00", prefab);
+        //O prefab é o nó da MESH, não a Armature. O grass00.glb ainda vem com
+        //armature (Grass_0→Grass_1→Grass_2) do tempo em que a grama era
+        //skinnada; instanciar a partir dela clonaria os 3 ossos + a armature
+        //junto, 5 nodes por tufo, e milhares de tufos viram dezenas de milhares
+        //de nodes percorridos todo frame — pra 75 vértices de geometria.
+        //Pegando só a mesh, é 1 node por tufo.
+        const grassNode = nodes.find(n=>n.renderable);
+        if(!grassNode) throw new Error("grass00.glb: nenhum nó com mesh");
+        grassNode.renderable!.passMask = RenderPassBit.Main; //rígida: vai no main pass
+        grassNode.renderable!.material = getMaterial("grass");
+        //Grama NÃO projeta sombra — ver Renderable.castsShadow. A folha é mais
+        //fina que um texel do shadow map (64 unidades de mundo / 1024 = ~6cm),
+        //então o que saía não era sombra de grama, era mancha dura recortada em
+        //resolução insuficiente, ainda por cima descolada da base pelo depth
+        //bias. Some junto o custo dela em TODOS os shadow maps.
+        grassNode.renderable!.castsShadow = false;
+        //Solta o esqueleto: os ossos ficam fora do prefab, e uma referência de
+        //skin apontando pra nós que não existem na instância é bug esperando.
+        //A mesh continua trazendo JOINTS_0/WEIGHTS_0 no buffer (o GrassMaterial
+        //lida com os dois strides) — reexportar sem armature enxuga isso.
+        grassNode.skin = null;
+        grassNode.setParent(null);
+        this.prefabs.set("grass00", Prefab.fromTemplate(grassNode, "grass00"));
     }
    
     private createPrefab(n:Node, s:string){

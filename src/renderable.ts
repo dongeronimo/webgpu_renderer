@@ -45,6 +45,25 @@ export class Renderable {
    * (number e não RenderPassBit: o OR de dois bits já não é membro do enum.)
    */
   public passMask: number = RenderPassBit.Main;
+  /**
+   * Este renderable PROJETA sombra? (default true — todo objeto sólido projeta.)
+   *
+   * É pergunta do OBJETO, não do material: dois objetos com o mesmo material
+   * podem discordar, e é o objeto que ocupa espaço no mundo. Análogo do
+   * shadowCastingMode do Renderer da Unity.
+   *
+   * Existe por causa de clutter de chão. Grama, pedrinha, detrito: geometria
+   * mais fina que um texel do shadow map, que não contribui informação de
+   * iluminação nenhuma e contribui MUITO artefato (mancha dura, aliasing,
+   * sombra descolada da base pelo depth bias). Some ainda com o custo dela em
+   * todos os shadow maps, que com um mapa por luz não é pouco. A oclusão que
+   * esse tipo de objeto de fato tem — a base ser mais escura — se pinta na
+   * textura, não se calcula.
+   *
+   * Não confundir com RECEBER sombra: quem não projeta continua sendo
+   * sombreado normalmente pelo que projeta.
+   */
+  public castsShadow = true;
   constructor(mesh: Mesh) {
     this.mesh = mesh;
     this.meshType = mesh.type;

@@ -121,11 +121,14 @@ function cloneStructure(src: Node, map: Map<Node, Node>, world: World | null): N
 }
 
 //Mesh e Material são compartilhados por referência (assets de GPU); só o
-//objeto Renderable é novo, com seu passMask próprio.
+//objeto Renderable é novo, com seu passMask e seu castsShadow próprios —
+//COPIADOS do template, senão a instância nasce com os defaults e a decisão
+//tomada no carregamento do asset se perde na primeira clonagem.
 function cloneRenderable(src: Renderable): Renderable {
     const renderable = new Renderable(src.mesh);
     renderable.material = src.material;
     renderable.passMask = src.passMask;
+    renderable.castsShadow = src.castsShadow;
     return renderable;
 }
 
