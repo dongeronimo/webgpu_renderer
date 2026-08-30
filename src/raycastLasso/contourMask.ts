@@ -1,4 +1,4 @@
-//Rasterização do contorno de um lasso numa MÁSCARA 2D — a peça que troca o
+//Rasterização de um contorno numa MÁSCARA 2D — serve o lasso E o bisturi — a peça que troca o
 //laço de segmentos do shader por um fetch de textura.
 //
 //Por quê: o teste dentro/fora não depende de t, nem de profundidade, nem de
@@ -12,8 +12,8 @@
 //em uv: u = x*0.5+0.5 e v = 0.5 - y*0.5 (o v cresce pra baixo, o NDC pra cima).
 //O shader faz essa mesma conta com o ponto projetado.
 
-/** Lado da máscara em texels. 512² = 256 KB por lasso em r8unorm. */
-export const LASSO_MASK_SIZE = 512;
+/** Lado da máscara em texels. 512² = 256 KB por contorno em r8unorm. */
+export const CONTOUR_MASK_SIZE = 512;
 
 /**
  * Rasteriza o contorno (NDC, x/y intercalados, ABERTO — o fechamento
@@ -25,7 +25,7 @@ export const LASSO_MASK_SIZE = 512;
  * auto-intersecta o tempo todo. Se as duas regras divergirem, a prévia passa a
  * mentir sobre o corte.
  */
-export function rasterizeLassoMask(points: Float32Array, size = LASSO_MASK_SIZE): Uint8Array<ArrayBuffer> {
+export function rasterizeContourMask(points: Float32Array, size = CONTOUR_MASK_SIZE): Uint8Array<ArrayBuffer> {
     const mask = new Uint8Array(size * size);
     const n = points.length / 2;
     if (n < 3) {

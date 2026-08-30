@@ -3,8 +3,9 @@
 import { combineReducers } from "redux";
 import type { CtfPoint } from "../ctf";
 import type { LassoData } from "../raycastLasso/lassoData";
+import type { ScalpelData } from "../raycastLasso/scalpelData";
 import { defaultWorld } from "../appConfig";
-import { CTF_SET_POINTS, GAUNTLET_CHARACTER_CHOSEN, LASSO_ADDED, LASSO_REMOVED, SET_LASSO_DEBUG_VIEW, GAUNTLET_CHOOSING_CHARACTER, GAUNTLET_LOGIN_SUCCEEDED, HELLO_CLICKED, ORBIT_CAMERA, SET_ACTIVE_TOOL, SET_ALPHA_SCALE, SET_CTF_HU_RANGE, SET_DEBUG_VIEW_ACTIVE, SET_GAUNTLET_SHADOW_MAP_SIZE, SET_LOADING, SET_RAYCAST_ESS, SET_RAYCAST_ESS_DEBUG, SET_RAYCAST_FRAMEBUFFER_SCALE, SET_RAYCAST_GRADIENT_MODE, SET_RAYCAST_GRADIENT_SHADING, SWITCH_WORLD, TEXTURE_BASED_CT_SET_NUM_SLICES, ZOOM_CAMERA, type AppAction, type GradientMode, type ToolName, type WorldName } from "./actions";
+import { CTF_SET_POINTS, GAUNTLET_CHARACTER_CHOSEN, LASSO_ADDED, LASSO_REMOVED, SCALPEL_ADDED, SCALPEL_REMOVED, SET_LASSO_DEBUG_VIEW, SET_SCALPEL_DEBUG_VIEW, SET_SCALPEL_MARGIN, GAUNTLET_CHOOSING_CHARACTER, GAUNTLET_LOGIN_SUCCEEDED, HELLO_CLICKED, ORBIT_CAMERA, SET_ACTIVE_TOOL, SET_ALPHA_SCALE, SET_CTF_HU_RANGE, SET_DEBUG_VIEW_ACTIVE, SET_GAUNTLET_SHADOW_MAP_SIZE, SET_LOADING, SET_RAYCAST_ESS, SET_RAYCAST_ESS_DEBUG, SET_RAYCAST_FRAMEBUFFER_SCALE, SET_RAYCAST_GRADIENT_MODE, SET_RAYCAST_GRADIENT_SHADING, SWITCH_WORLD, TEXTURE_BASED_CT_SET_NUM_SLICES, ZOOM_CAMERA, type AppAction, type GradientMode, type ToolName, type WorldName } from "./actions";
 
 export interface HelloState {
     /** Quantas vezes o botão de hello foi clicado. */
@@ -70,6 +71,10 @@ export interface RaycastState {
     //mesma natureza — knob de debug de uma técnica de render, lido pelo
     //material. O que os lassos SÃO mora no slice lasso; isto é só como mostrá-los.
     lassoDebugView: boolean;
+    //Idem pro bisturi: pinta a casca (verde-piscina) em vez de removê-la.
+    //Toggle separado do lasso porque as duas ferramentas são independentes —
+    //dá pra estar olhando o corte de uma enquanto a outra corta pra valer.
+    scalpelDebugView: boolean;
 }
 
 /**
@@ -97,6 +102,20 @@ export interface ToolsState {
  */
 export interface LassoState {
     items: LassoData[];
+}
+
+/**
+ * Os bisturis já fechados. Slice PRÓPRIO, irmão do lasso e não campo dele: o
+ * dado é outro (carrega espessura, e um mapa de profundidade que vive na GPU),
+ * e as duas listas crescem e encolhem independentes.
+ *
+ * margin é a exceção: não é documento, é o ajuste do PRÓXIMO corte — o
+ * tamanho do pincel. Cada ScalpelData guarda a margem com que foi feito, então
+ * mexer aqui não mexe retroativamente no que já foi cortado.
+ */
+export interface ScalpelState {
+    items: ScalpelData[];
+    margin: number;
 }
 
 /**
@@ -202,6 +221,7 @@ const raycastInitial: RaycastState = {
     //off por default: com lasso nenhum desenhado ele não faria nada mesmo, e
     //ligado por engano esconderia que o corte ainda não está cortando.
     lassoDebugView: false,
+    scalpelDebugView: false,
 };
 
 //Pitch máximo (~89°): abaixo do polo, onde o up (0,1,0) do lookAt ficaria
@@ -304,6 +324,8 @@ function raycastReducer(state: RaycastState = raycastInitial, action: AppAction)
             return { ...state, essDebugView: action.payload };
         case SET_LASSO_DEBUG_VIEW:
             return { ...state, lassoDebugView: action.payload };
+        case SET_SCALPEL_DEBUG_VIEW:
+            return { ...state, scalpelDebugView: action.payload };
         default:
             return state;
     }
@@ -343,6 +365,10 @@ function toolsReducer(state: ToolsState = toolsInitial, action: AppAction): Tool
 }
 
 const lassoInitial: LassoState = { items: [] };
+//Margem ZERO por default: quem define a espessura do corte é a camada medida
+//no mapa, não este slider. Ele existe pra corrigir uma camada que termina cedo
+//demais, e o valor certo na maioria dos casos é nenhum.
+const scalpelInitial: ScalpelState = { items: [], margin: 0 };
 
 //Array NOVO a cada mudança (nunca push in-place): é a troca de referência que
 //a behaviour do material vai detectar pra reenviar os lassos pra GPU, o mesmo
@@ -361,6 +387,20 @@ function lassoReducer(state: LassoState = lassoInitial, action: AppAction): Lass
     }
 }
 
+function scalpelReducer(state: ScalpelState = scalpelInitial, action: AppAction): ScalpelState {
+    switch (action.type) {
+        case SCALPEL_ADDED:
+            return { ...state, items: [...state.items, action.payload] };
+        case SCALPEL_REMOVED:
+            return { ...state, items: state.items.filter((sc) => sc.id !== action.payload) };
+        case SET_SCALPEL_MARGIN:
+            return { ...state, margin: action.payload };
+        //Sem reset no SWITCH_WORLD, igual ao lasso: é o trabalho do usuário.
+        default:
+            return state;
+    }
+}
+
 export const rootReducer = combineReducers({
     hello: helloReducer,
     base: baseReducer,
@@ -370,6 +410,7 @@ export const rootReducer = combineReducers({
     raycast: raycastReducer,
     tools: toolsReducer,
     lasso: lassoReducer,
+    scalpel: scalpelReducer,
     gauntlet: gauntletReducer,
 });
 

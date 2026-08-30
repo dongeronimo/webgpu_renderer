@@ -7,6 +7,7 @@
 
 import type { CtfPoint } from "../ctf";
 import type { LassoData } from "../raycastLasso/lassoData";
+import type { ScalpelData } from "../raycastLasso/scalpelData";
 
 export const HELLO_CLICKED = "HELLO_CLICKED";
 //nome == valor: é o VALOR que aparece em logs/devtools, e grep tem que achar
@@ -59,6 +60,16 @@ export const SET_RAYCAST_ESS_DEBUG = "SET_RAYCAST_ESS_DEBUG";
 //existe projetada ao longo do raio, então precisa do volume renderer pra
 //aparecer. Vai pros params do material (a behaviour lê e repassa).
 export const SET_LASSO_DEBUG_VIEW = "SET_LASSO_DEBUG_VIEW";
+//BISTURI. Actions próprias e não um "modo" das do lasso: o que ele produz é
+//outro dado (ScalpelData, com mapa de profundidade e espessura) e o efeito é
+//outro (descasca em vez de furar). Misturar os dois num payload só economizaria
+//três constantes e custaria a independência das duas ferramentas.
+export const SCALPEL_ADDED = "SCALPEL_ADDED";
+export const SCALPEL_REMOVED = "SCALPEL_REMOVED";
+//Margem do PRÓXIMO corte (o já feito guarda a dele) — o "tamanho do pincel".
+//Margem e não espessura: a espessura quem dá é a estrutura.
+export const SET_SCALPEL_MARGIN = "SET_SCALPEL_MARGIN";
+export const SET_SCALPEL_DEBUG_VIEW = "SET_SCALPEL_DEBUG_VIEW";
 //Ferramenta ARMADA na barra de tools (mundo raycastLasso por ora). O state é
 //UM valor e não um conjunto de flags de propósito: a exclusão mútua fica
 //ESTRUTURAL — não existe estado representável com dois tools armados pra
@@ -122,7 +133,7 @@ export type WorldName =
  * e não como "nenhum botão aceso": num radiogroup sempre tem exatamente um
  * selecionado, e o usuário precisa enxergar em que modo está.
  */
-export type ToolName = "none" | "lasso";
+export type ToolName = "none" | "lasso" | "scalpel";
 
 export interface HelloClickedAction {
     type: typeof HELLO_CLICKED;
@@ -197,6 +208,26 @@ export interface SetRaycastEssAction {
 
 export interface SetRaycastEssDebugAction {
     type: typeof SET_RAYCAST_ESS_DEBUG;
+    payload: boolean;
+}
+
+export interface ScalpelAddedAction {
+    type: typeof SCALPEL_ADDED;
+    payload: ScalpelData;
+}
+
+export interface ScalpelRemovedAction {
+    type: typeof SCALPEL_REMOVED;
+    payload: number;
+}
+
+export interface SetScalpelMarginAction {
+    type: typeof SET_SCALPEL_MARGIN;
+    payload: number;
+}
+
+export interface SetScalpelDebugViewAction {
+    type: typeof SET_SCALPEL_DEBUG_VIEW;
     payload: boolean;
 }
 
@@ -310,6 +341,22 @@ export function setRaycastEssDebugView(enabled: boolean): SetRaycastEssDebugActi
     return { type: SET_RAYCAST_ESS_DEBUG, payload: enabled };
 }
 
+export function scalpelAdded(scalpel: ScalpelData): ScalpelAddedAction {
+    return { type: SCALPEL_ADDED, payload: scalpel };
+}
+
+export function scalpelRemoved(id: number): ScalpelRemovedAction {
+    return { type: SCALPEL_REMOVED, payload: id };
+}
+
+export function setScalpelMargin(margin: number): SetScalpelMarginAction {
+    return { type: SET_SCALPEL_MARGIN, payload: margin };
+}
+
+export function setScalpelDebugView(enabled: boolean): SetScalpelDebugViewAction {
+    return { type: SET_SCALPEL_DEBUG_VIEW, payload: enabled };
+}
+
 export function setLassoDebugView(enabled: boolean): SetLassoDebugViewAction {
     return { type: SET_LASSO_DEBUG_VIEW, payload: enabled };
 }
@@ -366,6 +413,10 @@ export type AppAction =
     | SetRaycastEssDebugAction
     | SetActiveToolAction
     | SetLassoDebugViewAction
+    | ScalpelAddedAction
+    | ScalpelRemovedAction
+    | SetScalpelMarginAction
+    | SetScalpelDebugViewAction
     | LassoAddedAction
     | LassoRemovedAction
     | GauntletLoginSucceededAction

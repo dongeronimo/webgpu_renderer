@@ -34,7 +34,10 @@ import { bakePreIntegrationTable, PREINT_TABLE_SIZE, type CtfPoint } from "../ct
 import { Material, type PipelineContext } from "../material";
 import { MeshType, StaticMesh } from "../mesh";
 import type { LassoData } from "./lassoData";
-import { LASSO_MASK_SIZE, rasterizeLassoMask } from "./lassoMask";
+import { CONTOUR_MASK_SIZE, rasterizeContourMask } from "./contourMask";
+import type { ScalpelData } from "./scalpelData";
+import { DEFAULT_SURFACE_THRESHOLDS, ScalpelDepthPass, SCALPEL_DEPTH_SIZE } from "./scalpelDepthPass";
+import { mat4 } from "wgpu-matrix";
 
 const DEFAULT_STEP_SIZE = 1 / 256;
 
@@ -75,6 +78,9 @@ struct Params {
     //---
     numChunks: vec3f,  //nº de chunks por eixo (f32 → u32 no shader; offset 48)
     lassoDebug: f32,   //>0.5 PINTA a região dos lassos em vez de cortar (offset 60)
+    //---
+    scalpelCount: f32, //quantos bisturis vigentes (offset 64)
+    scalpelDebug: f32, //>0.5 PINTA a casca do bisturi em vez de cortar (offset 68)
 };
 @group(2) @binding(0) var<uniform> params: Params;
 @group(2) @binding(1) var samp: sampler;
@@ -88,6 +94,29 @@ struct Params {
 //A câmera congelada de cada lasso, na MESMA ordem das camadas: leva pLocal
 //direto pro clip daquele lasso (proj·view·model, composta na CPU).
 @group(2) @binding(7) var<storage, read> lassoClip: array<mat4x4f>;
+
+//---- BISTURI: recursos PRÓPRIOS, deliberadamente separados dos do lasso -----
+//As duas ferramentas se parecem (contorno + câmera congelada) mas produzem
+//coisas diferentes: o lasso fura de ponta a ponta, o bisturi descasca uma
+//camada. Compartilhar os buffers economizaria pouco e amarraria as duas — uma
+//mudança no lasso passaria a poder quebrar o corte por profundidade.
+@group(2) @binding(8) var scalpelMasks: texture_2d_array<f32>;
+struct Scalpel {
+    clipFromLocal: mat4x4f,
+    //MARGEM em unidades de mundo: o quanto remover ALÉM do fim da camada. A
+    //espessura do corte não vem daqui — vem do mapa, que mede onde a estrutura
+    //acaba em cada pixel. Zero é o valor normal.
+    margin: f32,
+};
+@group(2) @binding(9) var<storage, read> scalpels: array<Scalpel>;
+//O mapa da CAMADA, capturado quando o bisturi foi feito (ScalpelDepthPass):
+//R = onde o material começa, G = onde ACABA, por pixel. É o G que dá noção de
+//estrutura ao corte — sem ele a casca teria espessura fixa e truncaria em
+//cotoco tudo que é curvo. rg32float, lido com textureLoad e SEM filtro: além
+//de dispensar a feature float32-filterable, interpolar profundidade através de
+//uma silhueta daria um valor que não existe em lugar nenhum — a mesma regra
+//que vale pra shadow map.
+@group(2) @binding(10) var scalpelDepths: texture_2d_array<f32>;
 
 const REFERENCE_SLICE_COUNT: f32 = 128.0;
 const MAX_STEPS: i32 = 512;
@@ -123,6 +152,80 @@ fn insideAnyLasso(pLocal: vec3f, count: u32) -> bool {
         }
     }
     return false;
+}
+
+//Verde-piscina: a segunda ferramenta precisa de uma cor que não se confunda
+//com o magenta do lasso nem com nada que exista numa CT. São DUAS: a clara
+//marca onde a superfície foi DETECTADA, a escura o fundo da casca. Assim a
+//debug view não diz só "aqui vai sumir" — diz onde o mapa de profundidade
+//acha que está a pele, que é a parte que dá errado em silêncio.
+const SCALPEL_SURFACE_TINT = vec3f(0.75, 1.0, 0.96);
+const SCALPEL_DEBUG_TINT = vec3f(0.0, 0.72, 0.66);
+//Opacidade MÍNIMA das amostras pintadas na debug view.
+//
+//Sem isto o debug do bisturi é invisível, e a razão é sutil: o tint mexe na
+//COR, mas o peso da contribuição sai do aRef, que é a opacidade que a CTF dá
+//àquela amostra. O lasso se safa porque pinta um trecho longo do raio e soma
+//até aparecer; a casca do bisturi tem uns 5% do raio e frequentemente cai em
+//tecido que a CTF atual quase não mostra — pintar sem forçar alpha é pintar no
+//vidro. Só vale com a debug view ligada: no corte de verdade nada disso roda.
+const SCALPEL_DEBUG_MIN_ALPHA: f32 = 0.22;
+//Bias pra FRENTE da superfície. A profundidade guardada e a posição das
+//amostras vêm de marchas diferentes (resoluções e passos diferentes), então
+//sem folga o corte começa um tiquinho tarde e sobra uma casquinha flutuando —
+//o peter-panning dos shadow maps. Errar pra frente remove um fio de ar, que
+//não se vê; errar pra trás deixa sujeira na tela.
+const SCALPEL_BIAS: f32 = 0.005;
+//O passe grava 1e30 onde o raio não achou superfície. Qualquer coisa acima
+//deste corte conta como "não achou".
+const SCALPEL_NO_SURFACE: f32 = 1e29;
+
+//O ponto cai dentro da CASCA de algum bisturi?
+//
+//É o teste do lasso MAIS a comparação de profundidade — e é exatamente essa
+//comparação a mais que transforma a pirâmide infinita numa casca que segue o
+//relevo. Sem ela (lasso), todo ponto da reta olho→pixel tem a mesma resposta;
+//com ela, só a faixa [entrada, saída+margem] responde sim — e essa faixa tem a
+//espessura DA ESTRUTURA naquele pixel, não uma espessura escolhida no slider.
+fn scalpelShellRatio(pLocal: vec3f, count: u32) -> f32 {
+    for (var i = 0u; i < count; i = i + 1u) {
+        let sc = scalpels[i];
+        let c = sc.clipFromLocal * vec4f(pLocal, 1.0);
+        //Atrás do olho congelado: projetaria espelhado.
+        if (c.w <= 0.0) {
+            continue;
+        }
+        let uv = vec2f(c.x / c.w, -c.y / c.w) * 0.5 + vec2f(0.5);
+        //Fora do contorno desenhado: nem olha a profundidade.
+        if (textureSampleLevel(scalpelMasks, samp, uv, i, 0.0).r <= 0.5) {
+            continue;
+        }
+        //uv → texel, pro textureLoad (sem sampler, sem filtro).
+        let dims = vec2f(textureDimensions(scalpelDepths));
+        let texel = vec2i(clamp(uv * dims, vec2f(0.0), dims - vec2f(1.0)));
+        //R = entrada da camada, G = saída. Os dois no mesmo texel, capturados
+        //na mesma marcha — então não há como um estar de um lasso e outro de
+        //outro.
+        let layer = textureLoad(scalpelDepths, texel, i, 0).rg;
+        let dEnter = layer.r;
+        //Raio que só atravessou ar: não há camada nenhuma pra remover aqui.
+        if (dEnter >= SCALPEL_NO_SURFACE) {
+            continue;
+        }
+        //O fim do corte é o fim da ESTRUTURA, mais a margem do usuário.
+        let dExit = layer.g + sc.margin;
+        //c.w é a profundidade LINEAR na câmera congelada — a mesma unidade em
+        //que o mapa foi gravado.
+        if (c.w >= dEnter - SCALPEL_BIAS && c.w <= dExit) {
+            //ONDE na camada: 0 = na superfície detectada, 1 = no fim dela. O
+            //corte ignora esse número (dentro é dentro); quem o usa é a debug
+            //view, pra separar as duas coisas visualmente.
+            return clamp((c.w - dEnter) / max(dExit - dEnter, 1e-6), 0.0, 1.0);
+        }
+    }
+    //Negativo = fora de toda casca. Sentinela e não bool porque o valor de
+    //dentro carrega informação que o debug precisa.
+    return -1.0;
 }
 
 struct VsOut {
@@ -195,8 +298,9 @@ fn fs(in: VsOut) -> @location(0) vec4f {
     let chunkCell = vec3f(params.chunkSize) / vec3f(textureDimensions(volume));
     let nChunks = vec3u(u32(params.numChunks.x), u32(params.numChunks.y), u32(params.numChunks.z));
     let nChunksMax = vec3f(nChunks) - vec3f(1.0);
-    //uniforme: sai do laço
+    //uniformes: saem do laço
     let lassoCount = u32(params.lassoCount);
+    let scalpelCount = u32(params.scalpelCount);
 
     var acc = vec4f(0.0);
     var t = tNear;
@@ -246,6 +350,21 @@ fn fs(in: VsOut) -> @location(0) vec4f {
             }
         }
 
+        //SCALPEL: bloco PRÓPRIO, e não um "modo" do lasso. O teste é outro
+        //(reprojeta, consulta a máscara E compara profundidade) e o resultado é
+        //outro (casca, não furo). A duplicação da reprojeção é de propósito: as
+        //duas ferramentas evoluem separadas, e mexer numa não pode quebrar a
+        //outra. Vem DEPOIS do lasso porque custa mais — o lasso decide com um
+        //fetch, o bisturi com dois.
+        var scalpelShell = -1.0;
+        if (scalpelCount > 0u) {
+            scalpelShell = scalpelShellRatio(pLocal + rd * (step * 0.5), scalpelCount);
+            if (scalpelShell >= 0.0 && params.scalpelDebug <= 0.5) {
+                t = t + step;
+                continue;
+            }
+        }
+
         let sf = textureSampleLevel(volume, samp, uvw, 0.0).r;
         let sb = textureSampleLevel(volume, samp, uvw + rd * step, 0.0).r;
         let uf = (sf - params.ctfMin) / range;
@@ -288,8 +407,19 @@ fn fs(in: VsOut) -> @location(0) vec4f {
         if (lassoHit) {
             rgb = mix(rgb, LASSO_DEBUG_TINT, 0.75);
         }
-
-        let aRef = clamp(c.a * params.alphaScale, 0.0, 1.0);
+        var aRef = clamp(c.a * params.alphaScale, 0.0, 1.0);
+        //BISTURI (debug view): pinta a casca e FORÇA um alpha mínimo. Aqui,
+        //depois do aRef, e não junto do tint do lasso, justamente porque
+        //precisa mexer na opacidade — pintar só a cor deixaria a casca
+        //invisível em tecido que a CTF atual não mostra.
+        //
+        //Claro na superfície detectada, escurecendo até o fim do descasque: o
+        //degradê é o que deixa ver, de uma olhada, se o mapa de profundidade
+        //pousou na pele ou flutuando.
+        if (scalpelShell >= 0.0) {
+            rgb = mix(SCALPEL_SURFACE_TINT, SCALPEL_DEBUG_TINT, scalpelShell);
+            aRef = max(aRef, SCALPEL_DEBUG_MIN_ALPHA);
+        }
         let alpha = 1.0 - pow(1.0 - aRef, opacityExponent);
         let w = (1.0 - acc.a) * alpha;
         acc = vec4f(acc.rgb + w * rgb, acc.a + w);
@@ -323,6 +453,13 @@ export class VolumeRaycastLassoMaterial extends Material {
                     //máscaras dos lassos (1 camada por lasso) + as matrizes congeladas
                     { binding: 6, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: "float", viewDimension: "2d-array" } },
                     { binding: 7, visibility: GPUShaderStage.FRAGMENT, buffer: { type: "read-only-storage" } },
+                    //bisturi: máscaras + (matriz, espessura) + mapas de profundidade.
+                    //O r32float é "unfilterable-float" porque é lido com
+                    //textureLoad — sem isso a validação exigiria a feature
+                    //float32-filterable só pra um sampler que não se usa.
+                    { binding: 8, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: "float", viewDimension: "2d-array" } },
+                    { binding: 9, visibility: GPUShaderStage.FRAGMENT, buffer: { type: "read-only-storage" } },
+                    { binding: 10, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: "unfilterable-float", viewDimension: "2d-array" } },
                 ],
             });
         }
@@ -400,6 +537,12 @@ export class VolumeRaycastLassoMaterial extends Material {
     //também é — nada disso pode ser readonly.
     private lassoMaskTexture!: GPUTexture;
     private lassoClipBuffer!: GPUBuffer;
+    //Bisturi: mesma dança de recriação, mais o mapa de profundidade e o passe
+    //que o preenche.
+    private scalpelMaskTexture!: GPUTexture;
+    private scalpelBuffer!: GPUBuffer;
+    private scalpelDepthTexture!: GPUTexture;
+    private readonly depthPass: ScalpelDepthPass;
     private bindGroup!: GPUBindGroup;
     private ctfMin = 0;
     private ctfMax = 1;
@@ -409,6 +552,8 @@ export class VolumeRaycastLassoMaterial extends Material {
     private gradientType: number;
     private useSkip: number;
     private lassoDebug = 0;
+    private scalpels: readonly ScalpelData[] = [];
+    private scalpelDebug = 0;
     //Os lassos vigentes. Guardados como VIERAM (a lista do redux é imutável:
     //o reducer cria array novo a cada mudança), pra o rebuild dos recursos de
     //GPU ter de onde partir sem depender de quem chamou.
@@ -457,9 +602,9 @@ export class VolumeRaycastLassoMaterial extends Material {
 
         this.paramsBuffer = device.createBuffer({
             label: "VolumeRaycastLassoMaterial params",
-            //struct Params: spacing:vec3f e numChunks:vec3f alinham em 16 → 64
-            //bytes (16 floats, padding nos índices 11 e 15 — ver writeParams)
-            size: 64,
+            //struct Params: spacing:vec3f e numChunks:vec3f alinham em 16, e os
+            //dois f32 do bisturi fecham um quarto bloco → 80 bytes (20 floats)
+            size: 80,
             usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
         });
         this.preintTexture = device.createTexture({
@@ -475,12 +620,16 @@ export class VolumeRaycastLassoMaterial extends Material {
         });
         //default seguro: tudo ocupado (processa tudo) até o world/behaviour
         //mandarem o skip-map de verdade — assim nada é pulado por engano.
+        //ANTES do setCtf: ele repassa a CTF pro passe de profundidade (o
+        //critério de superfície depende dela), então o passe já tem que existir.
+        this.depthPass = new ScalpelDepthPass(device);
         this.setSkipMap(new Uint32Array(chunkGrid.totalChunks).fill(1));
-        this.setCtf(ctfPoints); //bakeia a tabela + escreve os params
+        this.setCtf(ctfPoints); //bakeia a tabela + a LUT do passe + os params
 
-        //Sem lasso nenhum ainda, mas o layout exige os recursos: nascem no
-        //tamanho mínimo (1 camada de 1×1) e o world/behaviour os trocam.
+        //Sem lasso nem bisturi ainda, mas o layout exige os recursos: nascem
+        //no tamanho mínimo (1 camada de 1×1) e o world/behaviour os trocam.
         this.createLassoResources([]);
+        this.createScalpelResources([]);
         this.rebuildBindGroup();
     }
 
@@ -492,7 +641,7 @@ export class VolumeRaycastLassoMaterial extends Material {
      */
     private createLassoResources(lassos: readonly LassoData[]): void {
         const layers = Math.max(lassos.length, 1);
-        const size = lassos.length > 0 ? LASSO_MASK_SIZE : 1;
+        const size = lassos.length > 0 ? CONTOUR_MASK_SIZE : 1;
         this.lassoMaskTexture = this.device.createTexture({
             label: "VolumeRaycastLassoMaterial lasso masks",
             size: [size, size, layers],
@@ -503,12 +652,12 @@ export class VolumeRaycastLassoMaterial extends Material {
         //Rasterização na CPU, uma vez por lasso por edição — alguns ms, e só
         //quando a referência da lista troca (a behaviour é quem detecta).
         for (let i = 0; i < lassos.length; i++) {
-            const mask = rasterizeLassoMask(lassos[i].points, LASSO_MASK_SIZE);
+            const mask = rasterizeContourMask(lassos[i].points, CONTOUR_MASK_SIZE);
             this.device.queue.writeTexture(
                 { texture: this.lassoMaskTexture, origin: [0, 0, i] },
                 mask,
-                { bytesPerRow: LASSO_MASK_SIZE, rowsPerImage: LASSO_MASK_SIZE },
-                [LASSO_MASK_SIZE, LASSO_MASK_SIZE, 1],
+                { bytesPerRow: CONTOUR_MASK_SIZE, rowsPerImage: CONTOUR_MASK_SIZE },
+                [CONTOUR_MASK_SIZE, CONTOUR_MASK_SIZE, 1],
             );
         }
         //As matrizes na mesma ordem das camadas: o índice do laço do shader
@@ -525,6 +674,87 @@ export class VolumeRaycastLassoMaterial extends Material {
         this.device.queue.writeBuffer(this.lassoClipBuffer, 0, matrices);
     }
 
+    /**
+     * (Re)cria os recursos do bisturi E captura os mapas de profundidade.
+     *
+     * A captura é o que diferencia isto do createLassoResources: além de
+     * rasterizar o contorno na CPU, roda um render por bisturi (o
+     * ScalpelDepthPass) pra descobrir onde está a superfície visível vista
+     * daquela câmera. Tudo num encoder só, submetido na hora — não é trabalho
+     * de frame, é trabalho de EDIÇÃO.
+     *
+     * Recria e recaptura TUDO a cada mudança, mesmo os bisturis que já tinham
+     * mapa. Fica O(N) renders por edição, o que com um punhado de cortes é
+     * imperceptível e mantém um caminho só — que é o mesmo usado quando a CTF
+     * muda e todos os mapas ficam velhos de uma vez. Se um dia pesar, o
+     * conserto é um array de capacidade fixa e recapturar só a camada nova.
+     */
+    private createScalpelResources(scalpels: readonly ScalpelData[]): void {
+        const layers = Math.max(scalpels.length, 1);
+        const size = scalpels.length > 0 ? CONTOUR_MASK_SIZE : 1;
+        this.scalpelMaskTexture = this.device.createTexture({
+            label: "VolumeRaycastLassoMaterial scalpel masks",
+            size: [size, size, layers],
+            dimension: "2d",
+            format: "r8unorm",
+            usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST,
+        });
+        this.scalpelDepthTexture = this.device.createTexture({
+            label: "VolumeRaycastLassoMaterial scalpel depths",
+            size: [scalpels.length > 0 ? SCALPEL_DEPTH_SIZE : 1, scalpels.length > 0 ? SCALPEL_DEPTH_SIZE : 1, layers],
+            dimension: "2d",
+            //rg: entrada e saída da camada. Ver o ScalpelDepthPass.
+            format: "rg32float",
+            usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.RENDER_ATTACHMENT,
+        });
+        //struct Scalpel: mat4x4f (64B) + f32, com stride 80 pelo alinhamento
+        //de 16 do mat4 — 20 floats por bisturi, margem no índice 16.
+        const packed = new Float32Array(layers * 20);
+        for (let i = 0; i < scalpels.length; i++) {
+            packed.set(scalpels[i].clipFromLocal, i * 20);
+            packed[i * 20 + 16] = scalpels[i].margin;
+        }
+        this.scalpelBuffer = this.device.createBuffer({
+            label: "VolumeRaycastLassoMaterial scalpels",
+            size: packed.byteLength,
+            usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
+        });
+        this.device.queue.writeBuffer(this.scalpelBuffer, 0, packed);
+
+        if (scalpels.length === 0) {
+            return;
+        }
+        const encoder = this.device.createCommandEncoder({ label: "scalpel depth capture" });
+        for (let i = 0; i < scalpels.length; i++) {
+            const mask = rasterizeContourMask(scalpels[i].points, CONTOUR_MASK_SIZE);
+            this.device.queue.writeTexture(
+                { texture: this.scalpelMaskTexture, origin: [0, 0, i] },
+                mask,
+                { bytesPerRow: CONTOUR_MASK_SIZE, rowsPerImage: CONTOUR_MASK_SIZE },
+                [CONTOUR_MASK_SIZE, CONTOUR_MASK_SIZE, 1],
+            );
+            //A inversa desprojeta o pixel de volta pro volume: é ela que dá o
+            //raio daquela câmera congelada dentro do passe.
+            const inverse = mat4.inverse(scalpels[i].clipFromLocal);
+            this.depthPass.render(
+                encoder,
+                this.scalpelDepthTexture.createView({
+                    dimension: "2d",
+                    baseArrayLayer: i,
+                    arrayLayerCount: 1,
+                }),
+                this.volumeTexture,
+                this.gradientTexture,
+                scalpels[i].clipFromLocal,
+                inverse,
+                this.ctfMin,
+                this.ctfMax,
+                DEFAULT_SURFACE_THRESHOLDS,
+            );
+        }
+        this.device.queue.submit([encoder.finish()]);
+    }
+
     private rebuildBindGroup(): void {
         this.bindGroup = this.device.createBindGroup({
             label: "VolumeRaycastLassoMaterial instance",
@@ -538,11 +768,19 @@ export class VolumeRaycastLassoMaterial extends Material {
                 { binding: 5, resource: { buffer: this.occupiedBuffer } },
                 { binding: 6, resource: this.lassoMaskTexture.createView({ dimension: "2d-array" }) },
                 { binding: 7, resource: { buffer: this.lassoClipBuffer } },
+                { binding: 8, resource: this.scalpelMaskTexture.createView({ dimension: "2d-array" }) },
+                { binding: 9, resource: { buffer: this.scalpelBuffer } },
+                { binding: 10, resource: this.scalpelDepthTexture.createView({ dimension: "2d-array" }) },
             ],
         });
     }
 
     setCtf(points: readonly CtfPoint[]): void {
+        //A CTF entra no critério de superfície do bisturi (alpha mínimo), então
+        //os mapas de profundidade envelhecem junto com ela. Como o ScalpelData
+        //guarda a matriz, dá pra recapturar todos — é exatamente por isso que a
+        //matriz mora no dado e não só na GPU.
+        this.depthPass.setCtf(points);
         const baked = bakePreIntegrationTable(points);
         this.ctfMin = baked.huMin;
         this.ctfMax = baked.huMax;
@@ -553,6 +791,10 @@ export class VolumeRaycastLassoMaterial extends Material {
             [baked.size, baked.size, 1],
         );
         this.writeParams();
+        //Depois do writeParams: a recaptura lê this.ctfMin/ctfMax novos.
+        if (this.scalpels.length > 0) {
+            this.setScalpels(this.scalpels);
+        }
     }
 
     setAlphaScale(alphaScale: number): void {
@@ -610,6 +852,28 @@ export class VolumeRaycastLassoMaterial extends Material {
         this.writeParams();
     }
 
+    /**
+     * Troca a lista de bisturis: rasteriza os contornos, RECAPTURA os mapas de
+     * profundidade e refaz o bind group. Bem mais caro que o setLassos (um
+     * render por bisturi), e por isso só roda quando a lista muda de verdade —
+     * a behaviour compara por referência.
+     */
+    setScalpels(scalpels: readonly ScalpelData[]): void {
+        this.scalpels = scalpels;
+        this.scalpelMaskTexture.destroy();
+        this.scalpelDepthTexture.destroy();
+        this.scalpelBuffer.destroy();
+        this.createScalpelResources(scalpels);
+        this.rebuildBindGroup();
+        this.writeParams(); //scalpelCount mudou
+    }
+
+    /** Debug view do bisturi: pinta a casca (verde-piscina) em vez de removê-la. */
+    setScalpelDebug(enabled: boolean): void {
+        this.scalpelDebug = enabled ? 1 : 0;
+        this.writeParams();
+    }
+
     /** Quantos lassos estão vigentes (o shader vai precisar do mesmo número). */
     get lassoCount(): number {
         return this.lassos.length;
@@ -627,6 +891,7 @@ export class VolumeRaycastLassoMaterial extends Material {
                 this.useGradient, this.gradientType, this.useSkip, this.chunkSizeVoxels,
                 this.spacing[0], this.spacing[1], this.spacing[2], this.lassos.length,
                 this.numChunksX, this.numChunksY, this.numChunksZ, this.lassoDebug,
+                this.scalpels.length, this.scalpelDebug, 0, 0,
             ]),
         );
     }
@@ -663,5 +928,9 @@ export class VolumeRaycastLassoMaterial extends Material {
         this.occupiedBuffer.destroy();
         this.lassoMaskTexture.destroy();
         this.lassoClipBuffer.destroy();
+        this.scalpelMaskTexture.destroy();
+        this.scalpelDepthTexture.destroy();
+        this.scalpelBuffer.destroy();
+        this.depthPass.destroy();
     }
 }

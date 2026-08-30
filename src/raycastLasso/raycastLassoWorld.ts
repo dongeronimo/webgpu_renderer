@@ -150,6 +150,8 @@ export class RaycastLassoWorld extends World {
         //de partida é do world, mesmo padrão do skip-map acima.
         this.material.setLassos(store.getState().lasso.items);
         this.material.setLassoDebug(store.getState().raycast.lassoDebugView);
+        this.material.setScalpels(store.getState().scalpel.items);
+        this.material.setScalpelDebug(store.getState().raycast.scalpelDebugView);
 
         //O proxy: o cubo unitário [-0.5,0.5]³ = a caixa do volume.
         const cube = await loadGltf(this.device, "/models/unitary_cube.glb");

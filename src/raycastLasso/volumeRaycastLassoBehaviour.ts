@@ -27,6 +27,8 @@ export class VolumeRaycastLassoBehaviour extends Behaviour {
     //`!==` e nada de varrer a lista todo frame.
     private lastLassos = store.getState().lasso.items;
     private lastLassoDebug = store.getState().raycast.lassoDebugView;
+    private lastScalpels = store.getState().scalpel.items;
+    private lastScalpelDebug = store.getState().raycast.scalpelDebugView;
 
     constructor(
         private readonly material: VolumeRaycastLassoMaterial,
@@ -85,6 +87,19 @@ export class VolumeRaycastLassoBehaviour extends Behaviour {
         if (raycast.lassoDebugView !== this.lastLassoDebug) {
             this.lastLassoDebug = raycast.lassoDebugView;
             this.material.setLassoDebug(raycast.lassoDebugView);
+        }
+        //BISTURIS: mesmo padrão, mas MUITO mais caro do outro lado — cada
+        //mudança recaptura os mapas de profundidade (um render por bisturi).
+        //Por isso a comparação por referência importa ainda mais aqui: um
+        //`!==` frouxo custaria um punhado de raymarches por frame.
+        const scalpels = store.getState().scalpel.items;
+        if (scalpels !== this.lastScalpels) {
+            this.lastScalpels = scalpels;
+            this.material.setScalpels(scalpels);
+        }
+        if (raycast.scalpelDebugView !== this.lastScalpelDebug) {
+            this.lastScalpelDebug = raycast.scalpelDebugView;
+            this.material.setScalpelDebug(raycast.scalpelDebugView);
         }
     }
 }

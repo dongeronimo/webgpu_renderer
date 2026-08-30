@@ -34,6 +34,7 @@ import { GauntletCharacterSelectPanel } from "./gauntlet/GauntletCharacterSelect
 import RaycastESSToDos from "./raycast_ess/raycastESSToDos";
 import ToolsPanel from "./raycast_lasso/ToolsPanel";
 import { LassoCaptureOverlay } from "./raycast_lasso/LassoCaptureOverlay";
+import { ScalpelCaptureOverlay } from "./raycast_lasso/ScalpelCaptureOverlay";
 
 export function TerraPositionTable({ world }: { world: World }) {
     //Snapshot da translação global (colunas 12/13/14 da worldMatrix) —
@@ -117,7 +118,7 @@ function WorldUi({ world }: { world: World }) {
     if (world instanceof RaycastLassoWorld) {
         return (
             <div>
-                <RaycastESSRenderProperties showLassoMasks/>
+                <RaycastESSRenderProperties/>
                 <ToolsPanel/>
             </div>
         );
@@ -160,6 +161,8 @@ export function App({ world }: { world: World }) {
                lasso está armado. Antes dos painéis, senão cobriria eles também.*/}
             {world instanceof RaycastLassoWorld && activeTool === "lasso"
                 && <LassoCaptureOverlay world={world} />}
+            {world instanceof RaycastLassoWorld && activeTool === "scalpel"
+                && <ScalpelCaptureOverlay world={world} />}
             {/*Editor de CTF: painel próprio, nos mundos que consomem o state ctf
                (CT + os raycasters). A CTF é da modalidade, então o mesmo editor
                serve os três — e editar aqui estressa o recálculo do skip-map.*/}
