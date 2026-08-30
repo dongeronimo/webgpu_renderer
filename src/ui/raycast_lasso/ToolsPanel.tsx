@@ -85,11 +85,13 @@ export default function ToolsPanel() {
                 value={activeTool}
                 onChange={(tool) => dispatch(setActiveTool(tool))}
             />
-            {/*Aviso temporário: com o lasso armado ainda não acontece nada no
-               canvas — a captura do traço é a F1. Sai daqui quando ela entrar.*/}
+            {/*Os controles do traço, visíveis só com o lasso na mão — e aí a
+               câmera está congelada (o overlay de captura cobre a camada de
+               órbita), o que o aviso do arrasto já deixa implícito.*/}
             {activeTool === "lasso" && (
-                <p style={{ margin: "8px 0 0", fontSize: 11, opacity: 0.7, lineHeight: 1.35 }}>
-                    captura do traço ainda não implementada
+                <p style={{ margin: "8px 0 0", fontSize: 11, opacity: 0.7, lineHeight: 1.45 }}>
+                    arraste com o botão esquerdo pra desenhar<br />
+                    botão direito cancela · Esc solta a ferramenta
                 </p>
             )}
         </FloatingPanel>

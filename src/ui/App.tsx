@@ -33,6 +33,7 @@ import { GauntletShadowSettingsPanel } from "./gauntlet/GauntletShadowSettingsPa
 import { GauntletCharacterSelectPanel } from "./gauntlet/GauntletCharacterSelectPanel";
 import RaycastESSToDos from "./raycast_ess/raycastESSToDos";
 import ToolsPanel from "./raycast_lasso/ToolsPanel";
+import { LassoCaptureOverlay } from "./raycast_lasso/LassoCaptureOverlay";
 
 export function TerraPositionTable({ world }: { world: World }) {
     //Snapshot da translação global (colunas 12/13/14 da worldMatrix) —
@@ -135,6 +136,9 @@ function WorldUi({ world }: { world: World }) {
 }
 
 export function App({ world }: { world: World }) {
+    //Qual ferramenta está armada — só pra saber se o overlay de captura do
+    //lasso entra na frente da camada de órbita (ver o comentário lá embaixo).
+    const activeTool = useSelector((state: RootState) => state.tools.activeTool);
     //Sem div posicionado aqui: cada painel é um FloatingPanel que se
     //posiciona sozinho e religa o próprio pointer-events. O WorldSwitch
     //vive FORA do WorldUi porque pertence à app, não a um mundo — ele
@@ -149,6 +153,12 @@ export function App({ world }: { world: World }) {
                 || world instanceof RaycastLassoWorld
                 || world instanceof GauntletWorld //gambi temporária pra eu ter orbit control no multiplayer
                 || world instanceof GameVolumeWorld) && <OrbitControls />}
+            {/*Captura do lasso: DEPOIS do OrbitControls de propósito. Os dois são
+               inset:0 no mesmo container e não há z-index nenhum, então quem vem
+               depois pinta em cima e leva TODO evento de ponteiro — é esta ordem
+               (e não um if no OrbitControls) que congela a câmera enquanto o
+               lasso está armado. Antes dos painéis, senão cobriria eles também.*/}
+            {world instanceof RaycastLassoWorld && activeTool === "lasso" && <LassoCaptureOverlay />}
             {/*Editor de CTF: painel próprio, nos mundos que consomem o state ctf
                (CT + os raycasters). A CTF é da modalidade, então o mesmo editor
                serve os três — e editar aqui estressa o recálculo do skip-map.*/}
