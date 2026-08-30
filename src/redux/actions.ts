@@ -6,6 +6,7 @@
 //por aqui — vive no scene graph e a UI lê por polling (usePolled).
 
 import type { CtfPoint } from "../ctf";
+import type { LassoOp } from "../raycastLasso/lasso";
 
 export const HELLO_CLICKED = "HELLO_CLICKED";
 //nome == valor: é o VALOR que aparece em logs/devtools, e grep tem que achar
@@ -52,6 +53,20 @@ export const SET_RAYCAST_ESS = "SET_RAYCAST_ESS";
 //PiP de debug do ESS: liga/desliga o quadzinho com os cubos dos chunks mantidos.
 //Gateia PASSES de render (lido no render() do world), não é estado de nó.
 export const SET_RAYCAST_ESS_DEBUG = "SET_RAYCAST_ESS_DEBUG";
+//LASSO de remoção (mundo raycastLasso). Cinco actions, todas de INTENÇÃO:
+//  - MODE: liga/desliga o modo de desenho. Ligado, o App troca o OrbitControls
+//    pelo LassoOverlay — a órbita CONGELA, e é isso que garante que a câmera
+//    capturada no commit é a mesma de quando o traço começou.
+//  - OP: o que o PRÓXIMO lasso vai fazer (remover dentro / manter dentro).
+//  - ADD/UNDO/REDO/CLEAR: a pilha. Undo/redo não apagam nada — só movem o
+//    `cursor` (quantos lassos da lista valem), então desfazer é instantâneo e
+//    refazer não precisa reconstruir polígono nenhum.
+export const LASSO_SET_DRAWING = "LASSO_SET_DRAWING";
+export const LASSO_SET_OP = "LASSO_SET_OP";
+export const LASSO_ADD = "LASSO_ADD";
+export const LASSO_UNDO = "LASSO_UNDO";
+export const LASSO_REDO = "LASSO_REDO";
+export const LASSO_CLEAR = "LASSO_CLEAR";
 //Gauntlet: o form de login (UI) fez o POST /login e o server aceitou — a
 //credencial REAL daqui em diante é o cookie de sessão, não user/senha (por
 //isso a senha nunca entra no state: nenhum consumidor precisa dela depois
@@ -88,6 +103,7 @@ export type WorldName =
     "raycast" |
     "raycastESS" |
     "gameVolume" |
+    "raycastLasso" |
     "train" |
     "SkinningDemo" |
     "gauntlet";
@@ -166,6 +182,35 @@ export interface SetRaycastEssAction {
 export interface SetRaycastEssDebugAction {
     type: typeof SET_RAYCAST_ESS_DEBUG;
     payload: boolean;
+}
+
+export interface LassoSetDrawingAction {
+    type: typeof LASSO_SET_DRAWING;
+    payload: boolean;
+}
+
+export interface LassoSetOpAction {
+    type: typeof LASSO_SET_OP;
+    payload: LassoOp;
+}
+
+export interface LassoAddAction {
+    type: typeof LASSO_ADD;
+    /** Vértices em NDC (x,y intercalados), já simplificados pela UI. O `id` e
+     *  o `op` do registro final o reducer resolve (contador + op corrente). */
+    payload: { points: number[] };
+}
+
+export interface LassoUndoAction {
+    type: typeof LASSO_UNDO;
+}
+
+export interface LassoRedoAction {
+    type: typeof LASSO_REDO;
+}
+
+export interface LassoClearAction {
+    type: typeof LASSO_CLEAR;
 }
 
 export interface GauntletLoginSucceededAction {
@@ -257,6 +302,30 @@ export function setRaycastEssDebugView(enabled: boolean): SetRaycastEssDebugActi
     return { type: SET_RAYCAST_ESS_DEBUG, payload: enabled };
 }
 
+export function setLassoDrawing(active: boolean): LassoSetDrawingAction {
+    return { type: LASSO_SET_DRAWING, payload: active };
+}
+
+export function setLassoOp(op: LassoOp): LassoSetOpAction {
+    return { type: LASSO_SET_OP, payload: op };
+}
+
+export function addLasso(points: number[]): LassoAddAction {
+    return { type: LASSO_ADD, payload: { points } };
+}
+
+export function undoLasso(): LassoUndoAction {
+    return { type: LASSO_UNDO };
+}
+
+export function redoLasso(): LassoRedoAction {
+    return { type: LASSO_REDO };
+}
+
+export function clearLassos(): LassoClearAction {
+    return { type: LASSO_CLEAR };
+}
+
 export function gauntletLoginSucceeded(username: string): GauntletLoginSucceededAction {
     return { type: GAUNTLET_LOGIN_SUCCEEDED, payload: { username } };
 }
@@ -295,6 +364,12 @@ export type AppAction =
     | SetRaycastFramebufferScaleAction
     | SetRaycastEssAction
     | SetRaycastEssDebugAction
+    | LassoSetDrawingAction
+    | LassoSetOpAction
+    | LassoAddAction
+    | LassoUndoAction
+    | LassoRedoAction
+    | LassoClearAction
     | GauntletLoginSucceededAction
     | SetGauntletShadowMapSizeAction
     | GauntletSetCharacterScreenAction

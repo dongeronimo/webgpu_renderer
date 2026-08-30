@@ -19,6 +19,7 @@ import { TextureStackVolumeRendererCT } from "./textureStackVolumeRenderCT/textu
 import { StarshipDemoWorld } from "./StarshipDemo/StarshipDemoWorld";
 import { RaycastWorld } from "./raycast/raycastWorld";
 import { RaycastESSWorld } from "./raycastESS/raycastESSWorld";
+import { RaycastLassoWorld } from "./raycastLasso/raycastLassoWorld";
 import { GameVolumeWorld } from "./gameVolume/gameVolumeWorld";
 import { TrainWorld } from "./train/trainWorld";
 import { SkinningDemoWorld } from "./skinning/SkinningDemoWorld";
@@ -47,6 +48,7 @@ function makeWorld(name: WorldName, device: GPUDevice): World {
     case "StarshipDemo": return new StarshipDemoWorld(device);
     case "raycast": return new RaycastWorld(device);
     case "raycastESS": return new RaycastESSWorld(device);
+    case "raycastLasso": return new RaycastLassoWorld(device);
     case "gameVolume": return new GameVolumeWorld(device);
     case "train": return new TrainWorld(device);
     case "SkinningDemo": return new SkinningDemoWorld(device);

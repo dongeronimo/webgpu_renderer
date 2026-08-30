@@ -3,6 +3,8 @@
 import { combineReducers } from "redux";
 import type { CtfPoint } from "../ctf";
 import { defaultWorld } from "../appConfig";
+import type { LassoOp, LassoRecord } from "../raycastLasso/lasso";
+import { LASSO_ADD, LASSO_CLEAR, LASSO_REDO, LASSO_SET_DRAWING, LASSO_SET_OP, LASSO_UNDO } from "./actions";
 import { CTF_SET_POINTS, GAUNTLET_CHARACTER_CHOSEN, GAUNTLET_CHOOSING_CHARACTER, GAUNTLET_LOGIN_SUCCEEDED, HELLO_CLICKED, ORBIT_CAMERA, SET_ALPHA_SCALE, SET_CTF_HU_RANGE, SET_DEBUG_VIEW_ACTIVE, SET_GAUNTLET_SHADOW_MAP_SIZE, SET_LOADING, SET_RAYCAST_ESS, SET_RAYCAST_ESS_DEBUG, SET_RAYCAST_FRAMEBUFFER_SCALE, SET_RAYCAST_GRADIENT_MODE, SET_RAYCAST_GRADIENT_SHADING, SWITCH_WORLD, TEXTURE_BASED_CT_SET_NUM_SLICES, ZOOM_CAMERA, type AppAction, type GradientMode, type WorldName } from "./actions";
 
 export interface HelloState {
@@ -64,6 +66,30 @@ export interface RaycastState {
     essEnabled: boolean;
     //PiP de debug do ESS (cubos dos chunks mantidos) visível?
     essDebugView: boolean;
+}
+
+/**
+ * Estado do LASSO de remoção (mundo raycastLasso).
+ *
+ * O undo/redo aqui NÃO é command pattern: `lassos` é a lista completa (inclusive
+ * o que foi desfeito) e `cursor` diz quantos dela valem. Undo = cursor--,
+ * redo = cursor++, lasso novo = trunca em cursor e empilha. Como o teste é 100%
+ * shader e a fonte da verdade é esta lista, desfazer é instantâneo — não há nada
+ * pra reverter no volume.
+ *
+ * `drawing` é o MODO (não "arrastando agora"): ligado, o App troca o
+ * OrbitControls pelo LassoOverlay e a câmera congela — invariante de que a
+ * behaviour depende pra capturar a matriz certa no commit.
+ */
+export interface LassoState {
+    drawing: boolean;
+    /** O que o PRÓXIMO lasso desenhado vai fazer. */
+    op: LassoOp;
+    lassos: LassoRecord[];
+    /** Quantos lassos da lista estão ativos (0..lassos.length). */
+    cursor: number;
+    /** Próximo id a distribuir — o contador mora no state pro reducer ser puro. */
+    nextId: number;
 }
 
 /**
@@ -166,6 +192,16 @@ const raycastInitial: RaycastState = {
     framebufferScale : 1.0,
     essEnabled: true,
     essDebugView: true,
+};
+
+//O modo de desenho começa DESLIGADO: entrar no mundo orbitando é o
+//comportamento esperado; desenhar é a ação deliberada.
+const lassoInitial: LassoState = {
+    drawing: false,
+    op: "remove-inside",
+    lassos: [],
+    cursor: 0,
+    nextId: 1,
 };
 
 //Pitch máximo (~89°): abaixo do polo, onde o up (0,1,0) do lookAt ficaria
@@ -271,6 +307,39 @@ function raycastReducer(state: RaycastState = raycastInitial, action: AppAction)
     }
 }
 
+function lassoReducer(state: LassoState = lassoInitial, action: AppAction): LassoState {
+    switch (action.type) {
+        case LASSO_SET_DRAWING:
+            return { ...state, drawing: action.payload };
+        case LASSO_SET_OP:
+            return { ...state, op: action.payload };
+        case LASSO_ADD: {
+            //polígono degenerado (traço curto demais, ou um clique) não vira
+            //lasso: no shader ele removeria nada e ainda custaria um laço.
+            if (action.payload.points.length < 6) {
+                return state;
+            }
+            //Desenhar DEPOIS de um undo descarta o ramo desfeito — é o
+            //comportamento de todo editor: o redo morre quando você diverge.
+            const lassos = [
+                ...state.lassos.slice(0, state.cursor),
+                { id: state.nextId, points: action.payload.points, op: state.op },
+            ];
+            return { ...state, lassos, cursor: lassos.length, nextId: state.nextId + 1 };
+        }
+        case LASSO_UNDO:
+            return { ...state, cursor: Math.max(0, state.cursor - 1) };
+        case LASSO_REDO:
+            return { ...state, cursor: Math.min(state.lassos.length, state.cursor + 1) };
+        case LASSO_CLEAR:
+            //nextId NÃO reinicia: id reciclado confundiria o cache de matrizes
+            //da behaviour (um lasso novo herdaria a câmera de um morto).
+            return { ...state, lassos: [], cursor: 0 };
+        default:
+            return state;
+    }
+}
+
 //Ordena AQUI, no único ponto de escrita — quem despacha não precisa saber
 //da invariante, e quem consome (SetCtfBehaviour → bakeCtfLut) confia nela.
 //Array novo a cada set: é a troca de REFERÊNCIA que a behaviour detecta.
@@ -292,6 +361,7 @@ export const rootReducer = combineReducers({
     ctf: ctfReducer,
     camera: cameraReducer,
     raycast: raycastReducer,
+    lasso: lassoReducer,
     gauntlet: gauntletReducer,
 });
 

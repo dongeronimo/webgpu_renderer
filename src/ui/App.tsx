@@ -21,6 +21,7 @@ import { GpuStats } from "./GpuStats";
 import { NetLag } from "./NetLag";
 import { RaycastWorld } from "../raycast/raycastWorld";
 import { RaycastESSWorld } from "../raycastESS/raycastESSWorld";
+import { RaycastLassoWorld } from "../raycastLasso/raycastLassoWorld";
 import { GameVolumeWorld } from "../gameVolume/gameVolumeWorld";
 import { OrbitControls } from "./OrbitControls";
 import RaycastRenderProperties from "./raycast/raycastRenderProperties";
@@ -31,6 +32,8 @@ import { GauntletLoginPanel } from "./gauntlet/GauntletLoginPanel";
 import { GauntletShadowSettingsPanel } from "./gauntlet/GauntletShadowSettingsPanel";
 import { GauntletCharacterSelectPanel } from "./gauntlet/GauntletCharacterSelectPanel";
 import RaycastESSToDos from "./raycast_ess/raycastESSToDos";
+import { LassoOverlay } from "./raycast_lasso/LassoOverlay";
+import { LassoPanel } from "./raycast_lasso/LassoPanel";
 
 export function TerraPositionTable({ world }: { world: World }) {
     //Snapshot da translação global (colunas 12/13/14 da worldMatrix) —
@@ -107,6 +110,16 @@ function WorldUi({ world }: { world: World }) {
             </div>
         )
     }
+    if (world instanceof RaycastLassoWorld) {
+        //mesmos knobs de render do ESS (o painel lê o slice `raycast`, que é
+        //compartilhado pelos raycasters) + o painel do lasso
+        return (
+            <div>
+                <RaycastESSRenderProperties />
+                <LassoPanel />
+            </div>
+        );
+    }
     if (world instanceof GauntletWorld) {
         return (
             <div>
@@ -125,21 +138,32 @@ export function App({ world }: { world: World }) {
     //posiciona sozinho e religa o próprio pointer-events. O WorldSwitch
     //vive FORA do WorldUi porque pertence à app, não a um mundo — ele
     //sobrevive à troca com estado (drag/minimizado) intacto.
+    const lassoDrawing = useSelector((state: RootState) => state.lasso.drawing);
+    const isLassoWorld = world instanceof RaycastLassoWorld;
+    const orbits = world instanceof RaycastWorld || world instanceof RaycastESSWorld
+        || world instanceof GauntletWorld //gambi temporária pra eu ter orbit control no multiplayer
+        || world instanceof GameVolumeWorld
+        || isLassoWorld;
     return (
         <>
             {/*captura de mouse pra órbita: PRIMEIRO filho de propósito —
                pinta atrás dos painéis, então drag/scroll no vazio orbitam e
                nos painéis continuam sendo do painel. Só nos mundos que orbitam
-               (baseline + ESS, ambos com a OrbitCameraBehaviour).*/}
-            {(world instanceof RaycastWorld || world instanceof RaycastESSWorld
-                || world instanceof GauntletWorld //gambi temporária pra eu ter orbit control no multiplayer
-                || world instanceof GameVolumeWorld) && <OrbitControls />}
+               (baseline + ESS, ambos com a OrbitCameraBehaviour).
+               No modo lasso o LassoOverlay entra NO LUGAR do OrbitControls
+               (nunca os dois): a câmera congela enquanto se desenha, e é dessa
+               invariante que a VolumeRaycastLassoBehaviour depende pra congelar
+               a matriz certa no commit do traço.*/}
+            {isLassoWorld && lassoDrawing
+                ? <LassoOverlay />
+                : orbits && <OrbitControls />}
             {/*Editor de CTF: painel próprio, nos mundos que consomem o state ctf
                (CT + os raycasters). A CTF é da modalidade, então o mesmo editor
                serve os três — e editar aqui estressa o recálculo do skip-map.*/}
             {(world instanceof TextureStackVolumeRendererCT
                 || world instanceof RaycastWorld
-                || world instanceof RaycastESSWorld) && <CtfEditorPanel />}
+                || world instanceof RaycastESSWorld
+                || isLassoWorld) && <CtfEditorPanel />}
             <WorldSwitch />
             {/*Tela de carga: UI base como o WorldSwitch (sobrevive à troca) e
                por cima de tudo (z-index do ModalPanel). Aparece sozinha lendo

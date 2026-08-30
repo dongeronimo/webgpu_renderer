@@ -20,6 +20,7 @@ const worldApp: Record<WorldName, AppId> = {
     StarshipDemo: "gauntlet",
     raycast: "vr",
     raycastESS: "vr",
+    raycastLasso: "vr",
     gameVolume: "vr",
     train: "gauntlet",
     SkinningDemo: "gauntlet",
