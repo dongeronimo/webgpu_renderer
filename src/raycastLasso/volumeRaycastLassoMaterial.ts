@@ -5,25 +5,27 @@
 //baseline de qualidade/velocidade (A/B no gpuTimer), e o corte por lasso é
 //experimentado aqui sem risco pra ele.
 //
-//NESTA ETAPA o shader é IDÊNTICO ao do ESS — o mundo é só o andaime. O corte
-//entra depois, e o plano é este:
+//O QUE O LASSO ACRESCENTA ao laço (procure por "LASSO:" no fragment):
 //
-//  1. Um lasso = polígono em NDC + a viewProj CONGELADA do instante do desenho.
-//     Pré-multiplicada pelo model, vira M_lasso: pLocal ([-0.5,0.5]³) → clip do
-//     lasso. Guardar a MATRIZ (e não um vetor de direção) é o que faz o sólido
-//     removido ser a PIRÂMIDE infinita que o usuário viu na tela, e não um
-//     prisma que só bate no centro da imagem.
-//  2. A projeção é AFIM em t no espaço homogêneo:
-//         M*(o + t*rd) = M*o + t*(M*rd) = A + t*B
-//     então A e B saem UMA vez por raio (2 mat4×vec4, hoisted como o chunkCell),
-//     e no laço sobra `c = A + B*t` + uma divisão. Nada de mat4 por amostra.
-//  3. O teste dentro/fora: crossing-number contra os segmentos na v1; máscara 2D
-//     rasterizada (1 textureSampleLevel, sem branch divergente) na v2.
-//  4. Descartar o SEGMENTO, não a amostra: o laço lê sf em uvw e sb em
-//     uvw+rd*step e indexa T[sf][sb]. Cortar só uma das pontas indexa um par que
-//     não existe mais — faixa de cor errada na borda do corte.
+//  1. Um lasso = contorno em NDC + a câmera CONGELADA do instante do desenho,
+//     já composta em clipFromLocal (proj·view·model): pLocal ([-0.5,0.5]³) →
+//     clip daquele lasso. Guardar a MATRIZ (e não um vetor de direção) é o que
+//     faz o sólido removido ser a PIRÂMIDE infinita que o usuário viu na tela,
+//     e não um prisma que só coincide com o traço no centro da imagem.
+//  2. O teste dentro/fora é um fetch: o contorno vira uma máscara rasterizada
+//     na CPU (lassoMask.ts), uma camada do texture_2d_array por lasso. Custo
+//     fixo, sem branch divergente — varrer os segmentos por amostra seria
+//     dezenas de milhares de testes por pixel.
+//  3. Descarta-se o SEGMENTO, não a amostra: o laço lê sf em uvw e sb em
+//     uvw+rd*step e indexa T[sf][sb]. Cortar só uma das pontas indexaria um par
+//     que não existe mais — faixa de cor errada na borda do corte. Por isso o
+//     ponto de teste é o MÉDIO do segmento.
+//  4. O teste vem ANTES de amostrar: dentro de um lasso, o segmento nem chega a
+//     custar as leituras do volume, a CTF e as 6 fetches do gradiente.
 //
-//O ponto de entrada está marcado com "LASSO:" no laço do fragment.
+//params.lassoDebug troca o corte pela PINTURA da mesma região (magenta) — é a
+//debug view das máscaras, e o único jeito de conferir a matriz sem que o que
+//você quer olhar desapareça da tela.
 //
 //Bind groups: iguais aos do ESS (grupos 0/1 do frame/objeto; grupo 2 material
 //com params/sampler/volume/preint/gradient/skip-map). Só aceita MeshType.Static
@@ -223,6 +225,27 @@ fn fs(in: VsOut) -> @location(0) vec4f {
             }
         }
 
+        //LASSO: dentro de algum lasso, este segmento não existe.
+        //
+        //O teste vem AQUI, antes de qualquer amostragem, porque cortar depois
+        //seria pagar as duas leituras do volume, a CTF pré-integrada e o bloco
+        //do gradiente (6 fetches no modo on-the-fly) pra jogar tudo fora. Só
+        //perde pro skip-map, que é uma leitura de storage e ainda salta o chunk
+        //inteiro — por isso ele vem antes.
+        //
+        //Ponto MÉDIO do segmento: o par (sf,sb) da CTF pré-integrada descreve o
+        //segmento inteiro, então ou ele todo entra ou ele todo sai.
+        var lassoHit = false;
+        if (lassoCount > 0u) {
+            lassoHit = insideAnyLasso(pLocal + rd * (step * 0.5), lassoCount);
+            //O CORTE. Com a debug view ligada não corta: cai fora do if e o
+            //segmento segue o caminho normal pra ser PINTADO lá embaixo.
+            if (lassoHit && params.lassoDebug <= 0.5) {
+                t = t + step;
+                continue;
+            }
+        }
+
         let sf = textureSampleLevel(volume, samp, uvw, 0.0).r;
         let sb = textureSampleLevel(volume, samp, uvw + rd * step, 0.0).r;
         let uf = (sf - params.ctfMin) / range;
@@ -259,19 +282,11 @@ fn fs(in: VsOut) -> @location(0) vec4f {
             }
         }
 
-        //LASSO (debug): pinta o que SERIA removido, em vez de remover. O corte
-        //de verdade é a mesma condição com "t = t + step; continue;" no lugar
-        //do mix — e é só isso que falta.
-        //
-        //O ponto de teste é o MÉDIO do segmento, e não pLocal: a CTF
-        //pré-integrada consome o segmento inteiro (sf em uvw, sb em uvw+rd*step)
-        //e indexa T[sf][sb], então o corte terá que descartar o SEGMENTO, não a
-        //amostra. Testando o mesmo ponto agora, o que o debug pinta é
-        //exatamente o que vai sumir depois.
-        if (params.lassoDebug > 0.5 && lassoCount > 0u) {
-            if (insideAnyLasso(pLocal + rd * (step * 0.5), lassoCount)) {
-                rgb = mix(rgb, LASSO_DEBUG_TINT, 0.75);
-            }
+        //LASSO (debug view): pinta o que o corte teria removido. lassoHit só
+        //chega aqui verdadeiro com a debug view ligada — sem ela, o segmento já
+        //teria dado continue lá em cima.
+        if (lassoHit) {
+            rgb = mix(rgb, LASSO_DEBUG_TINT, 0.75);
         }
 
         let aRef = clamp(c.a * params.alphaScale, 0.0, 1.0);

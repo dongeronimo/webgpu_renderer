@@ -48,14 +48,21 @@ const DEBUG_PIP_RES_SCALE = 0.4;
 // O que é clonado de verdade é o par material+behaviour, porque o corte por
 // lasso mora no shader e no sync UI→engine.
 //
-// NESTA ETAPA é um clone funcionalmente idêntico ao ESS: o andaime pra o lasso
-// entrar. O que falta, na ordem:
-//   F1 — captura do lasso (overlay React, NDC), 1 polígono num uniform, teste
-//        crossing-number no shader, modo remove-inside.
-//   F2 — máscara 2D rasterizada em texture_2d_array, N lassos, undo/redo por
-//        cursor no redux, modo keep-inside (crop).
-//   F3 — normal analítica da parede do corte (hoje o gradiente ainda lê dados
-//        de dentro da região removida) e skip-map ciente do lasso.
+// O QUE JÁ CORTA: o usuário arma o lasso na barra de ferramentas (o overlay de
+// captura cobre a camada de órbita, congelando a câmera), desenha o contorno, e
+// no pointerup o par (contorno em NDC, clipFromLocal congelada) vira um
+// LassoData no redux. A behaviour vê a referência do array trocar, o material
+// rasteriza cada contorno numa camada do texture_2d_array e o raymarch descarta
+// os segmentos que caem dentro de qualquer lasso. N lassos, acumulativos.
+//
+// O QUE FALTA:
+//   - undo/redo: a primitiva (LASSO_REMOVED, por id) já existe no redux, falta
+//     o botão na UI e a pilha/cursor;
+//   - modo keep-inside (crop), o inverso do remove-inside de hoje;
+//   - normal analítica da parede do corte: o gradiente ainda lê dados de DENTRO
+//     da região removida, então a parede é sombreada com a normal do tecido;
+//   - skip-map ciente do lasso: hoje o ESS continua correto (só pula o que é
+//     comprovadamente vazio) mas não ganha nada com o corte.
 export class RaycastLassoWorld extends World {
     private mainPass!: MeshRenderPass;
     private finalPass!: FinalRenderPass;
