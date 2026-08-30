@@ -21,9 +21,12 @@ export function ScalpelCaptureOverlay({ world }: { world: RaycastLassoWorld }) {
     //A margem é lida NO MOMENTO do commit e congelada no dado: mexer no slider
     //depois não muda os cortes já feitos, como o tamanho de um pincel.
     const margin = useSelector((state: RootState) => state.scalpel.margin);
+    //A CTF vai junto no dado, congelada como a câmera: é ela que define o que
+    //conta como superfície, e sem ela o corte não seria reproduzível.
+    const ctf = useSelector((state: RootState) => state.ctf.points);
 
     function onCommit(points: Float32Array, clipFromLocal: Mat4) {
-        dispatch(scalpelAdded({ id: nextScalpelId(), points, clipFromLocal, margin }));
+        dispatch(scalpelAdded({ id: nextScalpelId(), points, clipFromLocal, margin, ctf }));
     }
 
     return <ContourCaptureOverlay world={world} ink={INK} fill={FILL} onCommit={onCommit} />;

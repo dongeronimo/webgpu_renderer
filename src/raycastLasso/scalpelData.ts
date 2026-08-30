@@ -15,6 +15,7 @@
 //relação de um projective texturing pra um shadow map: o lasso reprojeta e
 //consulta; o bisturi reprojeta, consulta E compara profundidade.
 import type { Mat4 } from "wgpu-matrix";
+import type { CtfPoint } from "../ctf";
 
 /** Contorno + câmera congelada + espessura do descasque. Imutável. */
 export interface ScalpelData {
@@ -45,6 +46,22 @@ export interface ScalpelData {
      * tinha quando foi feito, como o tamanho do pincel.
      */
     margin: number;
+    /**
+     * A CTF do instante do traço, CONGELADA junto com a câmera.
+     *
+     * Não é redundância com o state.ctf: o critério de superfície (alpha da CTF
+     * acima do mínimo) depende dela, então o mapa da camada só é reproduzível
+     * com a mesma transferência que estava valendo quando o corte foi feito.
+     * Sem isto, desfazer e refazer um bisturi com a CTF diferente devolveria um
+     * corte DIFERENTE do original — o undo deixaria de ser fiel.
+     *
+     * Guardar a referência é seguro: o ctfReducer cria array novo a cada
+     * mudança, nunca mexe no que já existe.
+     *
+     * A consequência boa vem de graça: mexer na CTF depois não remexe mais em
+     * corte nenhum, e a edição de CTF deixou de disparar recaptura.
+     */
+    ctf: readonly CtfPoint[];
 }
 
 //Contador próprio: os ids não se misturam com os dos lassos porque as duas

@@ -620,11 +620,11 @@ export class VolumeRaycastLassoMaterial extends Material {
         });
         //default seguro: tudo ocupado (processa tudo) até o world/behaviour
         //mandarem o skip-map de verdade — assim nada é pulado por engano.
-        //ANTES do setCtf: ele repassa a CTF pro passe de profundidade (o
-        //critério de superfície depende dela), então o passe já tem que existir.
+        //O passe é criado antes do createScalpelResources, que é quem o usa. A
+        //LUT dele não vem daqui: cada bisturi carrega a CTF dele.
         this.depthPass = new ScalpelDepthPass(device);
         this.setSkipMap(new Uint32Array(chunkGrid.totalChunks).fill(1));
-        this.setCtf(ctfPoints); //bakeia a tabela + a LUT do passe + os params
+        this.setCtf(ctfPoints); //bakeia a tabela pré-integrada + os params
 
         //Sem lasso nem bisturi ainda, mas o layout exige os recursos: nascem
         //no tamanho mínimo (1 camada de 1×1) e o world/behaviour os trocam.
@@ -721,21 +721,28 @@ export class VolumeRaycastLassoMaterial extends Material {
         });
         this.device.queue.writeBuffer(this.scalpelBuffer, 0, packed);
 
-        if (scalpels.length === 0) {
-            return;
-        }
-        const encoder = this.device.createCommandEncoder({ label: "scalpel depth capture" });
+        //UM ENCODER POR BISTURI, e não um pra todos. O passe tem uma LUT de CTF
+        //só, e cada bisturi é capturado com a CTF QUE ELE CONGELOU — como
+        //queue.writeTexture é ordenado em relação aos submits e não aos passes
+        //dentro de um encoder, juntar tudo num encoder faria os N passes verem
+        //a última LUT escrita. Submeter a cada volta custa alguns submits numa
+        //ação de usuário; misturar as LUTs custaria cortes errados.
         for (let i = 0; i < scalpels.length; i++) {
-            const mask = rasterizeContourMask(scalpels[i].points, CONTOUR_MASK_SIZE);
+            const scalpel = scalpels[i];
+            const mask = rasterizeContourMask(scalpel.points, CONTOUR_MASK_SIZE);
             this.device.queue.writeTexture(
                 { texture: this.scalpelMaskTexture, origin: [0, 0, i] },
                 mask,
                 { bytesPerRow: CONTOUR_MASK_SIZE, rowsPerImage: CONTOUR_MASK_SIZE },
                 [CONTOUR_MASK_SIZE, CONTOUR_MASK_SIZE, 1],
             );
+            //A CTF DELE, não a da tela: é ela que define o que conta como
+            //superfície, e o domínio da LUT sai junto pra normalizar o HU.
+            const domain = this.depthPass.setCtf(scalpel.ctf);
             //A inversa desprojeta o pixel de volta pro volume: é ela que dá o
             //raio daquela câmera congelada dentro do passe.
-            const inverse = mat4.inverse(scalpels[i].clipFromLocal);
+            const inverse = mat4.inverse(scalpel.clipFromLocal);
+            const encoder = this.device.createCommandEncoder({ label: "scalpel depth capture" });
             this.depthPass.render(
                 encoder,
                 this.scalpelDepthTexture.createView({
@@ -745,14 +752,14 @@ export class VolumeRaycastLassoMaterial extends Material {
                 }),
                 this.volumeTexture,
                 this.gradientTexture,
-                scalpels[i].clipFromLocal,
+                scalpel.clipFromLocal,
                 inverse,
-                this.ctfMin,
-                this.ctfMax,
+                domain.huMin,
+                domain.huMax,
                 DEFAULT_SURFACE_THRESHOLDS,
             );
+            this.device.queue.submit([encoder.finish()]);
         }
-        this.device.queue.submit([encoder.finish()]);
     }
 
     private rebuildBindGroup(): void {
@@ -776,11 +783,11 @@ export class VolumeRaycastLassoMaterial extends Material {
     }
 
     setCtf(points: readonly CtfPoint[]): void {
-        //A CTF entra no critério de superfície do bisturi (alpha mínimo), então
-        //os mapas de profundidade envelhecem junto com ela. Como o ScalpelData
-        //guarda a matriz, dá pra recapturar todos — é exatamente por isso que a
-        //matriz mora no dado e não só na GPU.
-        this.depthPass.setCtf(points);
+        //NÃO mexe nos bisturis. Cada um carrega a CTF dele congelada no dado
+        //(ScalpelData.ctf), então o mapa da camada dele não envelhece quando a
+        //transferência da tela muda — um corte é uma edição na peça, não um
+        //ajuste de visualização. De quebra, editar a CTF deixou de custar uma
+        //recaptura por bisturi.
         const baked = bakePreIntegrationTable(points);
         this.ctfMin = baked.huMin;
         this.ctfMax = baked.huMax;
@@ -791,10 +798,6 @@ export class VolumeRaycastLassoMaterial extends Material {
             [baked.size, baked.size, 1],
         );
         this.writeParams();
-        //Depois do writeParams: a recaptura lê this.ctfMin/ctfMax novos.
-        if (this.scalpels.length > 0) {
-            this.setScalpels(this.scalpels);
-        }
     }
 
     setAlphaScale(alphaScale: number): void {

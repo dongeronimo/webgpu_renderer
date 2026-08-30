@@ -15,9 +15,10 @@
 //processo são outros.
 import { useEffect } from "react";
 import { useDispatch, useSelector } from "react-redux";
-import { setActiveTool, setLassoDebugView, setScalpelDebugView, setScalpelMargin, type ToolName } from "../../redux/actions";
+import { redo, setActiveTool, setLassoDebugView, setScalpelDebugView, setScalpelMargin, undo, type ToolName } from "../../redux/actions";
 import type { RootState } from "../../redux/reducers";
 import type { AppDispatch } from "../../redux/store";
+import { Button } from "../generic/Button";
 import { FloatingPanel } from "../generic/FloatingPanel";
 import { Slider } from "../generic/Slider";
 import { Toggle } from "../generic/Toggle";
@@ -98,6 +99,10 @@ export default function ToolsPanel() {
     //orbitar.
     const lassoDebugView = useSelector((state: RootState) => state.raycast.lassoDebugView);
     const scalpelDebugView = useSelector((state: RootState) => state.raycast.scalpelDebugView);
+    //Só o TAMANHO das pilhas: selecionar os arrays faria a barra re-renderizar
+    //a cada empilhada, e o que a UI precisa saber é apenas se dá pra clicar.
+    const canUndo = useSelector((state: RootState) => state.history.undo.length > 0);
+    const canRedo = useSelector((state: RootState) => state.history.redo.length > 0);
 
     //Esc desarma. Listener na window (e não no painel) porque a mão do usuário
     //vai estar no canvas, não no painel — o foco quase nunca está aqui. Só
@@ -116,11 +121,65 @@ export default function ToolsPanel() {
         return () => window.removeEventListener("keydown", onKeyDown);
     }, [activeTool, dispatch]);
 
+    //Ctrl+Z / Ctrl+Y (e Ctrl+Shift+Z, que é o redo do resto do mundo). metaKey
+    //junto pra funcionar no Mac. Na window, como o Esc: a mão do usuário está no
+    //canvas, não no painel.
+    useEffect(() => {
+        function onKeyDown(e: KeyboardEvent) {
+            if (!e.ctrlKey && !e.metaKey) {
+                return;
+            }
+            //Digitando num campo, Ctrl+Z é do campo — não sequestra.
+            const target = e.target as HTMLElement | null;
+            if (target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA"
+                || target.isContentEditable)) {
+                return;
+            }
+            const key = e.key.toLowerCase();
+            if (key === "z" && !e.shiftKey) {
+                e.preventDefault();
+                dispatch(undo());
+            } else if (key === "y" || (key === "z" && e.shiftKey)) {
+                e.preventDefault();
+                dispatch(redo());
+            }
+        }
+        window.addEventListener("keydown", onKeyDown);
+        return () => window.removeEventListener("keydown", onKeyDown);
+    }, [dispatch]);
+
     const drawing = activeTool !== "none";
 
     return (
-        <FloatingPanel title="Ferramentas" width={196} height="auto"
+        <FloatingPanel title="Ferramentas" width={212} height="auto"
             style={{ bottom: 8, left: 220 }}>
+            {/*Desfazer/refazer no TOPO: valem pra barra inteira, não pra uma
+               ferramenta. Desabilitados com a pilha vazia — é o que diz se há
+               algo a desfazer sem precisar de contador na tela.*/}
+            <div style={{ display: "flex", gap: 6, marginBottom: 10 }}>
+                <Button
+                    variant="secondary"
+                    size="sm"
+                    icon={<span>↶</span>}
+                    disabled={!canUndo}
+                    title="Desfazer (Ctrl+Z)"
+                    style={{ flex: 1 }}
+                    onClick={() => dispatch(undo())}
+                >
+                    Desfazer
+                </Button>
+                <Button
+                    variant="secondary"
+                    size="sm"
+                    icon={<span>↷</span>}
+                    disabled={!canRedo}
+                    title="Refazer (Ctrl+Y)"
+                    style={{ flex: 1 }}
+                    onClick={() => dispatch(redo())}
+                >
+                    Refazer
+                </Button>
+            </div>
             <ToolRadioGroup
                 name="raycast-lasso-tool"
                 label="Ferramenta ativa"

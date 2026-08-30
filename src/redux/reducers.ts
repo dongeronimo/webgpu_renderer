@@ -1,11 +1,12 @@
 //Reducers: funções puras (state, action) => novo state. Redux clássico,
 //switch e spread — sem toolkit, sem immer.
 import { combineReducers } from "redux";
+import { historyInitial, invertAction, type HistoryState } from "./history";
 import type { CtfPoint } from "../ctf";
 import type { LassoData } from "../raycastLasso/lassoData";
 import type { ScalpelData } from "../raycastLasso/scalpelData";
 import { defaultWorld } from "../appConfig";
-import { CTF_SET_POINTS, GAUNTLET_CHARACTER_CHOSEN, LASSO_ADDED, LASSO_REMOVED, SCALPEL_ADDED, SCALPEL_REMOVED, SET_LASSO_DEBUG_VIEW, SET_SCALPEL_DEBUG_VIEW, SET_SCALPEL_MARGIN, GAUNTLET_CHOOSING_CHARACTER, GAUNTLET_LOGIN_SUCCEEDED, HELLO_CLICKED, ORBIT_CAMERA, SET_ACTIVE_TOOL, SET_ALPHA_SCALE, SET_CTF_HU_RANGE, SET_DEBUG_VIEW_ACTIVE, SET_GAUNTLET_SHADOW_MAP_SIZE, SET_LOADING, SET_RAYCAST_ESS, SET_RAYCAST_ESS_DEBUG, SET_RAYCAST_FRAMEBUFFER_SCALE, SET_RAYCAST_GRADIENT_MODE, SET_RAYCAST_GRADIENT_SHADING, SWITCH_WORLD, TEXTURE_BASED_CT_SET_NUM_SLICES, ZOOM_CAMERA, type AppAction, type GradientMode, type ToolName, type WorldName } from "./actions";
+import { CTF_SET_POINTS, GAUNTLET_CHARACTER_CHOSEN, HISTORY_REDO, HISTORY_UNDO, LASSO_ADDED, LASSO_REMOVED, SCALPEL_ADDED, SCALPEL_REMOVED, SET_LASSO_DEBUG_VIEW, SET_SCALPEL_DEBUG_VIEW, SET_SCALPEL_MARGIN, GAUNTLET_CHOOSING_CHARACTER, GAUNTLET_LOGIN_SUCCEEDED, HELLO_CLICKED, ORBIT_CAMERA, SET_ACTIVE_TOOL, SET_ALPHA_SCALE, SET_CTF_HU_RANGE, SET_DEBUG_VIEW_ACTIVE, SET_GAUNTLET_SHADOW_MAP_SIZE, SET_LOADING, SET_RAYCAST_ESS, SET_RAYCAST_ESS_DEBUG, SET_RAYCAST_FRAMEBUFFER_SCALE, SET_RAYCAST_GRADIENT_MODE, SET_RAYCAST_GRADIENT_SHADING, SWITCH_WORLD, TEXTURE_BASED_CT_SET_NUM_SLICES, ZOOM_CAMERA, type AppAction, type GradientMode, type ToolName, type WorldName } from "./actions";
 
 export interface HelloState {
     /** Quantas vezes o botão de hello foi clicado. */
@@ -378,7 +379,7 @@ function lassoReducer(state: LassoState = lassoInitial, action: AppAction): Lass
         case LASSO_ADDED:
             return { ...state, items: [...state.items, action.payload] };
         case LASSO_REMOVED:
-            return { ...state, items: state.items.filter((l) => l.id !== action.payload) };
+            return { ...state, items: state.items.filter((l) => l.id !== action.payload.id) };
         //SEM reset no SWITCH_WORLD, ao contrário do tools: sair do mundo e
         //voltar não pode jogar fora o recorte que o usuário fez — as matrizes
         //continuam válidas (o model do volume é remontado idêntico).
@@ -392,7 +393,7 @@ function scalpelReducer(state: ScalpelState = scalpelInitial, action: AppAction)
         case SCALPEL_ADDED:
             return { ...state, items: [...state.items, action.payload] };
         case SCALPEL_REMOVED:
-            return { ...state, items: state.items.filter((sc) => sc.id !== action.payload) };
+            return { ...state, items: state.items.filter((sc) => sc.id !== action.payload.id) };
         case SET_SCALPEL_MARGIN:
             return { ...state, margin: action.payload };
         //Sem reset no SWITCH_WORLD, igual ao lasso: é o trabalho do usuário.
@@ -401,7 +402,16 @@ function scalpelReducer(state: ScalpelState = scalpelInitial, action: AppAction)
     }
 }
 
-export const rootReducer = combineReducers({
+//As pilhas de undo/redo entram no combined como reducer IDENTIDADE, e não
+//porque elas se atualizam sozinhas: quem as mantém é o rootReducer abaixo, que
+//precisa ver o state inteiro pra aplicar a ação inversa. Estar aqui só garante
+//que o `history` faça parte do RootState e nasça com o valor inicial — sem isso
+//o combineReducers reclamaria de chave inesperada a cada dispatch.
+function historyReducer(state: HistoryState = historyInitial): HistoryState {
+    return state;
+}
+
+const combinedReducer = combineReducers({
     hello: helloReducer,
     base: baseReducer,
     textureBasedCT: textureBasedCTReducer,
@@ -412,8 +422,60 @@ export const rootReducer = combineReducers({
     lasso: lassoReducer,
     scalpel: scalpelReducer,
     gauntlet: gauntletReducer,
+    history: historyReducer,
 });
 
-//O shape do state inteiro, derivado do rootReducer — é o tipo que os
-//useSelector da UI e os getState das behaviours enxergam.
-export type RootState = ReturnType<typeof rootReducer>;
+/**
+ * O reducer raiz de verdade: o combineReducers MAIS o histórico.
+ *
+ * Desfazer não restaura um snapshot — ele pega a ação inversa do topo da pilha
+ * e a RODA pelos mesmos reducers, como se o usuário a tivesse despachado. Duas
+ * consequências que valem o desenho:
+ *
+ *  - o state continua sendo sempre o resultado de uma sequência de ações, então
+ *    reproduzir um bug de undo é reproduzir uma lista de ações;
+ *  - os slices não sabem que existe undo. O lassoReducer só conhece "adiciona"
+ *    e "remove"; quem decide QUANDO removê-los é este wrapper.
+ *
+ * Undo e redo compartilham o código porque invertAction é uma involução: a
+ * única diferença é de qual pilha sai a ação e pra qual vai a inversa dela.
+ */
+export function rootReducer(state: RootState | undefined, action: AppAction): RootState {
+    if (state === undefined) {
+        return combinedReducer(undefined, action);
+    }
+    if (action.type === HISTORY_UNDO || action.type === HISTORY_REDO) {
+        const undoing = action.type === HISTORY_UNDO;
+        const from = undoing ? state.history.undo : state.history.redo;
+        const next = from[from.length - 1];
+        //Pilha vazia: nada a fazer, e devolver o MESMO objeto evita re-render.
+        if (next === undefined) {
+            return state;
+        }
+        const back = invertAction(next);
+        if (back === null) {
+            return state; //não deveria acontecer: só entra na pilha o que inverte
+        }
+        const rest = from.slice(0, -1);
+        const other = undoing ? state.history.redo : state.history.undo;
+        return {
+            ...combinedReducer(state, next),
+            history: undoing
+                ? { undo: rest, redo: [...other, back] }
+                : { undo: [...other, back], redo: rest },
+        };
+    }
+    const applied = combinedReducer(state, action);
+    const inverse = invertAction(action);
+    if (inverse === null) {
+        //Ação não-desfazível (CTF, câmera, toggles...): não empilha NEM limpa o
+        //redo. Mexer na CTF no meio e ainda poder refazer um corte é pretendido.
+        return applied;
+    }
+    //Edição nova mata o futuro: o que tinha sido desfeito não é mais refazível.
+    return { ...applied, history: { undo: [...state.history.undo, inverse], redo: [] } };
+}
+
+//O shape do state inteiro — é o tipo que os useSelector da UI e os getState das
+//behaviours enxergam.
+export type RootState = ReturnType<typeof combinedReducer>;

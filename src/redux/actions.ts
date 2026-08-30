@@ -70,6 +70,11 @@ export const SCALPEL_REMOVED = "SCALPEL_REMOVED";
 //Margem e não espessura: a espessura quem dá é a estrutura.
 export const SET_SCALPEL_MARGIN = "SET_SCALPEL_MARGIN";
 export const SET_SCALPEL_DEBUG_VIEW = "SET_SCALPEL_DEBUG_VIEW";
+//UNDO/REDO. Não carregam payload: o que fazer está nas pilhas do state, e quem
+//aplica é o rootReducer, despachando a ação inversa pelos reducers de sempre
+//(ver history.ts). A UI só pede "desfaz" — não sabe o que vai ser desfeito.
+export const HISTORY_UNDO = "HISTORY_UNDO";
+export const HISTORY_REDO = "HISTORY_REDO";
 //Ferramenta ARMADA na barra de tools (mundo raycastLasso por ora). O state é
 //UM valor e não um conjunto de flags de propósito: a exclusão mútua fica
 //ESTRUTURAL — não existe estado representável com dois tools armados pra
@@ -218,7 +223,8 @@ export interface ScalpelAddedAction {
 
 export interface ScalpelRemovedAction {
     type: typeof SCALPEL_REMOVED;
-    payload: number;
+    /** O bisturi inteiro, pelo mesmo motivo do LassoRemovedAction. */
+    payload: ScalpelData;
 }
 
 export interface SetScalpelMarginAction {
@@ -229,6 +235,14 @@ export interface SetScalpelMarginAction {
 export interface SetScalpelDebugViewAction {
     type: typeof SET_SCALPEL_DEBUG_VIEW;
     payload: boolean;
+}
+
+export interface HistoryUndoAction {
+    type: typeof HISTORY_UNDO;
+}
+
+export interface HistoryRedoAction {
+    type: typeof HISTORY_REDO;
 }
 
 export interface SetLassoDebugViewAction {
@@ -243,8 +257,12 @@ export interface LassoAddedAction {
 
 export interface LassoRemovedAction {
     type: typeof LASSO_REMOVED;
-    /** id do lasso a remover (e não o índice: a lista muda debaixo de quem pede). */
-    payload: number;
+    /**
+     * O lasso INTEIRO, não só o id. O reducer só usa o payload.id pra filtrar,
+     * mas o resto tem que estar aqui pra o undo conseguir reconstruir a ação
+     * que ressuscita o lasso sem consultar o state — ver history.ts.
+     */
+    payload: LassoData;
 }
 
 export interface SetActiveToolAction {
@@ -345,8 +363,8 @@ export function scalpelAdded(scalpel: ScalpelData): ScalpelAddedAction {
     return { type: SCALPEL_ADDED, payload: scalpel };
 }
 
-export function scalpelRemoved(id: number): ScalpelRemovedAction {
-    return { type: SCALPEL_REMOVED, payload: id };
+export function scalpelRemoved(scalpel: ScalpelData): ScalpelRemovedAction {
+    return { type: SCALPEL_REMOVED, payload: scalpel };
 }
 
 export function setScalpelMargin(margin: number): SetScalpelMarginAction {
@@ -365,8 +383,16 @@ export function lassoAdded(lasso: LassoData): LassoAddedAction {
     return { type: LASSO_ADDED, payload: lasso };
 }
 
-export function lassoRemoved(id: number): LassoRemovedAction {
-    return { type: LASSO_REMOVED, payload: id };
+export function lassoRemoved(lasso: LassoData): LassoRemovedAction {
+    return { type: LASSO_REMOVED, payload: lasso };
+}
+
+export function undo(): HistoryUndoAction {
+    return { type: HISTORY_UNDO };
+}
+
+export function redo(): HistoryRedoAction {
+    return { type: HISTORY_REDO };
 }
 
 export function setActiveTool(tool: ToolName): SetActiveToolAction {
@@ -417,6 +443,8 @@ export type AppAction =
     | ScalpelRemovedAction
     | SetScalpelMarginAction
     | SetScalpelDebugViewAction
+    | HistoryUndoAction
+    | HistoryRedoAction
     | LassoAddedAction
     | LassoRemovedAction
     | GauntletLoginSucceededAction

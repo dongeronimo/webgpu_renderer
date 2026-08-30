@@ -2,8 +2,9 @@
 //congelado de um bisturi. É o "shadow map" do corte: a luz é a câmera do
 //instante do traço, e o que se guarda é a distância até a primeira superfície.
 //
-//QUANDO RODA: uma vez, quando um bisturi é fechado (e de novo quando a CTF
-//muda, porque o critério depende dela). NUNCA por frame. Por isso é um passe
+//QUANDO RODA: uma vez, quando um bisturi é fechado. NUNCA por frame, e nem
+//quando a CTF muda — cada bisturi carrega a CTF dele congelada no dado, então
+//o mapa dele nunca envelhece. Por isso é um passe
 //dedicado e não um alvo extra do passe principal: um MRT no raymarch pagaria
 //banda todo frame por um dado usado uma vez por laçada, e ainda amarraria a
 //resolução do mapa ao framebufferScale, que é um knob de PERFORMANCE — mexer
@@ -280,8 +281,20 @@ export class ScalpelDepthPass {
         return this.pipeline;
     }
 
-    /** A LUT 1D da CTF corrente — o critério de superfície depende dela. */
-    setCtf(points: readonly CtfPoint[]): void {
+    /**
+     * Carrega a LUT 1D de UMA CTF — a do bisturi que vai ser capturado agora, e
+     * não a corrente da tela.
+     *
+     * Devolve o domínio da LUT, que o render precisa pra normalizar o HU. Vem
+     * daqui e não do material de propósito: é o domínio DAQUELA CTF, e usar o
+     * da CTF atual desalinharia a consulta.
+     *
+     * A textura é UMA só e é reescrita a cada bisturi, então o chamador tem que
+     * submeter o encoder ANTES de chamar isto de novo — queue.writeTexture é
+     * ordenado em relação aos submits, não aos passes dentro de um encoder. Um
+     * encoder com N passes veria a última LUT escrita nos N.
+     */
+    setCtf(points: readonly CtfPoint[]): { huMin: number; huMax: number } {
         const baked = bakeCtfLut(points);
         this.device.queue.writeTexture(
             { texture: this.ctfLut },
@@ -289,6 +302,7 @@ export class ScalpelDepthPass {
             { bytesPerRow: CTF_LUT_WIDTH * 4, rowsPerImage: 1 },
             [CTF_LUT_WIDTH, 1, 1],
         );
+        return { huMin: baked.huMin, huMax: baked.huMax };
     }
 
     /**
