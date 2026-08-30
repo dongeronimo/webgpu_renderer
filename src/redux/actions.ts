@@ -52,6 +52,12 @@ export const SET_RAYCAST_ESS = "SET_RAYCAST_ESS";
 //PiP de debug do ESS: liga/desliga o quadzinho com os cubos dos chunks mantidos.
 //Gateia PASSES de render (lido no render() do world), não é estado de nó.
 export const SET_RAYCAST_ESS_DEBUG = "SET_RAYCAST_ESS_DEBUG";
+//Ferramenta ARMADA na barra de tools (mundo raycastLasso por ora). O state é
+//UM valor e não um conjunto de flags de propósito: a exclusão mútua fica
+//ESTRUTURAL — não existe estado representável com dois tools armados pra
+//alguém esquecer de desligar. Quem consome é a UI (qual botão está aceso) e,
+//da F1 em diante, o overlay de captura (quem come os eventos do ponteiro).
+export const SET_ACTIVE_TOOL = "SET_ACTIVE_TOOL";
 //Gauntlet: o form de login (UI) fez o POST /login e o server aceitou — a
 //credencial REAL daqui em diante é o cookie de sessão, não user/senha (por
 //isso a senha nunca entra no state: nenhum consumidor precisa dela depois
@@ -92,6 +98,17 @@ export type WorldName =
     "train" |
     "SkinningDemo" |
     "gauntlet";
+
+/**
+ * As ferramentas da barra de tools, como union pelo mesmo motivo do WorldName:
+ * typo morre em compile time. Cresce junto com os tools.
+ *
+ * "none" NÃO é ausência de modo — é o modo CÂMERA, aquele em que arrastar
+ * orbita. É por isso que ele aparece na UI como um botão de verdade ("Câmera")
+ * e não como "nenhum botão aceso": num radiogroup sempre tem exatamente um
+ * selecionado, e o usuário precisa enxergar em que modo está.
+ */
+export type ToolName = "none" | "lasso";
 
 export interface HelloClickedAction {
     type: typeof HELLO_CLICKED;
@@ -167,6 +184,11 @@ export interface SetRaycastEssAction {
 export interface SetRaycastEssDebugAction {
     type: typeof SET_RAYCAST_ESS_DEBUG;
     payload: boolean;
+}
+
+export interface SetActiveToolAction {
+    type: typeof SET_ACTIVE_TOOL;
+    payload: ToolName;
 }
 
 export interface GauntletLoginSucceededAction {
@@ -258,6 +280,10 @@ export function setRaycastEssDebugView(enabled: boolean): SetRaycastEssDebugActi
     return { type: SET_RAYCAST_ESS_DEBUG, payload: enabled };
 }
 
+export function setActiveTool(tool: ToolName): SetActiveToolAction {
+    return { type: SET_ACTIVE_TOOL, payload: tool };
+}
+
 export function gauntletLoginSucceeded(username: string): GauntletLoginSucceededAction {
     return { type: GAUNTLET_LOGIN_SUCCEEDED, payload: { username } };
 }
@@ -296,6 +322,7 @@ export type AppAction =
     | SetRaycastFramebufferScaleAction
     | SetRaycastEssAction
     | SetRaycastEssDebugAction
+    | SetActiveToolAction
     | GauntletLoginSucceededAction
     | SetGauntletShadowMapSizeAction
     | GauntletSetCharacterScreenAction

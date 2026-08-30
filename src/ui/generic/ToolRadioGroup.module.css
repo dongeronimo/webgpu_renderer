@@ -1,0 +1,85 @@
+/* Aparência única do ToolRadioGroup — mesma paleta do Button/Toggle/Slider
+   (primary #2b6cb0, hover #3182ce, foco #7ab8ff). */
+
+.group {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+/* A caixa clicável. O input real vive dentro dela, invisível. */
+.item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    position: relative;
+    padding: 5px 8px 5px 10px;
+    border: 1px solid rgba(255, 255, 255, 0.25);
+    border-radius: 6px;
+    background: rgba(255, 255, 255, 0.08);
+    color: #ddd;
+    font-size: 12px;
+    cursor: pointer;
+    user-select: none;
+    transition: background-color 80ms ease, border-color 80ms ease;
+}
+
+/* Invisível mas FOCÁVEL: display:none tiraria o input da ordem de tabulação
+   e mataria as setas do grupo. */
+.input {
+    position: absolute;
+    opacity: 0;
+    width: 0;
+    height: 0;
+    margin: 0;
+    pointer-events: none;
+}
+
+.item:hover:not(:has(.input:checked)) {
+    background: rgba(255, 255, 255, 0.16);
+}
+
+/* ARMADA. Três sinais somados, e não só a cor: fundo primary, borda clara e
+   a barrinha de acento na esquerda (::before). Cor sozinha some pra quem tem
+   deficiência de visão de cores — e o estado "que ferramenta está na minha
+   mão" é o mais importante da tela. O aria-checked vem do input nativo. */
+.item:has(.input:checked) {
+    background: #2b6cb0;
+    border-color: #7ab8ff;
+    color: #fff;
+}
+
+.item:has(.input:checked)::before {
+    content: "";
+    position: absolute;
+    left: 3px;
+    top: 5px;
+    bottom: 5px;
+    width: 3px;
+    border-radius: 2px;
+    background: #7ab8ff;
+}
+
+.item:has(.input:checked):hover {
+    background: #3182ce;
+}
+
+/* Anel de foco na CAIXA (o input não tem tamanho pra desenhar anel nenhum).
+   :focus-visible e não :focus: clicar com o mouse não acende o anel. */
+.item:has(.input:focus-visible) {
+    outline: 2px solid #7ab8ff;
+    outline-offset: 1px;
+}
+
+/* line-height 0 impede que o SVG estique a altura do item (mesmo motivo do
+   .icon do Button). */
+.icon {
+    display: inline-flex;
+    align-items: center;
+    line-height: 0;
+    flex: none;
+}
+
+.label {
+    flex: 1;
+}

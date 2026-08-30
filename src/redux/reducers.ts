@@ -3,7 +3,7 @@
 import { combineReducers } from "redux";
 import type { CtfPoint } from "../ctf";
 import { defaultWorld } from "../appConfig";
-import { CTF_SET_POINTS, GAUNTLET_CHARACTER_CHOSEN, GAUNTLET_CHOOSING_CHARACTER, GAUNTLET_LOGIN_SUCCEEDED, HELLO_CLICKED, ORBIT_CAMERA, SET_ALPHA_SCALE, SET_CTF_HU_RANGE, SET_DEBUG_VIEW_ACTIVE, SET_GAUNTLET_SHADOW_MAP_SIZE, SET_LOADING, SET_RAYCAST_ESS, SET_RAYCAST_ESS_DEBUG, SET_RAYCAST_FRAMEBUFFER_SCALE, SET_RAYCAST_GRADIENT_MODE, SET_RAYCAST_GRADIENT_SHADING, SWITCH_WORLD, TEXTURE_BASED_CT_SET_NUM_SLICES, ZOOM_CAMERA, type AppAction, type GradientMode, type WorldName } from "./actions";
+import { CTF_SET_POINTS, GAUNTLET_CHARACTER_CHOSEN, GAUNTLET_CHOOSING_CHARACTER, GAUNTLET_LOGIN_SUCCEEDED, HELLO_CLICKED, ORBIT_CAMERA, SET_ACTIVE_TOOL, SET_ALPHA_SCALE, SET_CTF_HU_RANGE, SET_DEBUG_VIEW_ACTIVE, SET_GAUNTLET_SHADOW_MAP_SIZE, SET_LOADING, SET_RAYCAST_ESS, SET_RAYCAST_ESS_DEBUG, SET_RAYCAST_FRAMEBUFFER_SCALE, SET_RAYCAST_GRADIENT_MODE, SET_RAYCAST_GRADIENT_SHADING, SWITCH_WORLD, TEXTURE_BASED_CT_SET_NUM_SLICES, ZOOM_CAMERA, type AppAction, type GradientMode, type ToolName, type WorldName } from "./actions";
 
 export interface HelloState {
     /** Quantas vezes o botão de hello foi clicado. */
@@ -64,6 +64,19 @@ export interface RaycastState {
     essEnabled: boolean;
     //PiP de debug do ESS (cubos dos chunks mantidos) visível?
     essDebugView: boolean;
+}
+
+/**
+ * Estado da barra de FERRAMENTAS. Slice próprio (e não campo do raycast) pelo
+ * mesmo critério do ctf: "que tool está armada" é modo de INTERAÇÃO da tela,
+ * não parâmetro de uma técnica de render — o dia que outro mundo ganhar tools,
+ * consome este mesmo slice sem herdar os knobs do raycaster junto.
+ *
+ * Um ÚNICO campo, e não um booleano por tool: a exclusão mútua vira invariante
+ * de tipo em vez de disciplina de quem despacha.
+ */
+export interface ToolsState {
+    activeTool: ToolName;
 }
 
 /**
@@ -285,6 +298,25 @@ function ctfReducer(state: CtfState = ctfInitial, action: AppAction): CtfState {
     }
 }
 
+//"none" = modo câmera: é onde a tela nasce, com o drag orbitando.
+const toolsInitial: ToolsState = { activeTool: "none" };
+
+function toolsReducer(state: ToolsState = toolsInitial, action: AppAction): ToolsState {
+    switch (action.type) {
+        case SET_ACTIVE_TOOL:
+            return { ...state, activeTool: action.payload };
+        //Trocar de mundo DESARMA a ferramenta. Senão o lasso continua armado
+        //num mundo que nem tem barra de tools — estado fantasma que só aparece
+        //quando o usuário volta e o botão está aceso sem ele ter clicado nada.
+        //Guarda o mesmo objeto quando já é "none": troca de mundo é frequente e
+        //referência nova à toa faz a UI re-renderizar sem motivo.
+        case SWITCH_WORLD:
+            return state.activeTool === "none" ? state : { ...state, activeTool: "none" };
+        default:
+            return state;
+    }
+}
+
 export const rootReducer = combineReducers({
     hello: helloReducer,
     base: baseReducer,
@@ -292,6 +324,7 @@ export const rootReducer = combineReducers({
     ctf: ctfReducer,
     camera: cameraReducer,
     raycast: raycastReducer,
+    tools: toolsReducer,
     gauntlet: gauntletReducer,
 });
 

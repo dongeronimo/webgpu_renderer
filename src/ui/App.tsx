@@ -32,6 +32,7 @@ import { GauntletLoginPanel } from "./gauntlet/GauntletLoginPanel";
 import { GauntletShadowSettingsPanel } from "./gauntlet/GauntletShadowSettingsPanel";
 import { GauntletCharacterSelectPanel } from "./gauntlet/GauntletCharacterSelectPanel";
 import RaycastESSToDos from "./raycast_ess/raycastESSToDos";
+import ToolsPanel from "./raycast_lasso/ToolsPanel";
 
 export function TerraPositionTable({ world }: { world: World }) {
     //Snapshot da translação global (colunas 12/13/14 da worldMatrix) —
@@ -113,7 +114,12 @@ function WorldUi({ world }: { world: World }) {
     //MESMO state.raycast. O painel próprio do lasso (desenhar/limpar/undo/redo,
     //lista de lassos) nasce na F1, junto do overlay de captura.
     if (world instanceof RaycastLassoWorld) {
-        return <RaycastESSRenderProperties/>;
+        return (
+            <div>
+                <RaycastESSRenderProperties/>
+                <ToolsPanel/>
+            </div>
+        );
     }
     if (world instanceof GauntletWorld) {
         return (
