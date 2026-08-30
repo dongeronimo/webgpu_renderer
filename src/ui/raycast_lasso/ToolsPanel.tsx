@@ -57,6 +57,9 @@ const TOOLS: readonly ToolRadioItem<ToolName>[] = [
 export default function ToolsPanel() {
     const dispatch = useDispatch<AppDispatch>();
     const activeTool = useSelector((state: RootState) => state.tools.activeTool);
+    //Quantos lassos já foram fechados. Ficam no state mesmo depois de soltar a
+    //ferramenta — são o documento, não o modo de interação.
+    const lassoCount = useSelector((state: RootState) => state.lasso.items.length);
 
     //Esc desarma. Listener na window (e não no painel) porque a mão do usuário
     //vai estar no canvas, não no painel — o foco quase nunca está aqui. Só
@@ -91,7 +94,12 @@ export default function ToolsPanel() {
             {activeTool === "lasso" && (
                 <p style={{ margin: "8px 0 0", fontSize: 11, opacity: 0.7, lineHeight: 1.45 }}>
                     arraste com o botão esquerdo pra desenhar<br />
-                    botão direito cancela · Esc solta a ferramenta
+                    botão direito cancela o traço · Esc solta a ferramenta
+                </p>
+            )}
+            {lassoCount > 0 && (
+                <p style={{ margin: "6px 0 0", fontSize: 11, opacity: 0.55 }}>
+                    {lassoCount} {lassoCount === 1 ? "lasso" : "lassos"}
                 </p>
             )}
         </FloatingPanel>

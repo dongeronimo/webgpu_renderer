@@ -17,8 +17,21 @@
 //shader vai usar, e imuniza o traço contra o framebufferScale e contra resize
 //da janela — redimensionar mantém o laço na mesma posição sobre o volume. O
 //desenho converte NDC→CSS px na hora de pintar.
+//
+//O QUE FICA DESENHADO: só os lassos fechados NESTA sessão de ferramenta. Eles
+//continuam no redux depois que o usuário solta o lasso, mas parar de desenhá-los
+//é o certo — o contorno em NDC só corresponde ao que está na tela enquanto a
+//câmera for a que o capturou. Soltar a ferramenta, orbitar e rearmar zera o
+//desenho; quem passa a mostrar os recortes antigos é o próprio volume, quando o
+//teste entrar no shader.
 import { useEffect, useRef } from "react";
 import type { PointerEvent as ReactPointerEvent, MouseEvent as ReactMouseEvent } from "react";
+import type { Mat4 } from "wgpu-matrix";
+import { useDispatch } from "react-redux";
+import { lassoAdded } from "../../redux/actions";
+import type { AppDispatch } from "../../redux/store";
+import type { RaycastLassoWorld } from "../../raycastLasso/raycastLassoWorld";
+import { nextLassoId } from "../../raycastLasso/lassoData";
 
 type NdcPoint = { x: number; y: number };
 
@@ -37,15 +50,28 @@ const HALO = "rgba(0, 0, 0, 0.55)";
 const INK = "#7ab8ff";
 const FILL = "rgba(122, 184, 255, 0.15)";
 
-export function LassoCaptureOverlay() {
+export function LassoCaptureOverlay({ world }: { world: RaycastLassoWorld }) {
+    const dispatch = useDispatch<AppDispatch>();
     const canvasRef = useRef<HTMLCanvasElement>(null);
     //Tudo em ref, nada em state: um traço à mão livre dispara pointermove a
     //~120Hz, e re-renderizar o React a cada ponto seria absurdo. O canvas é
     //pintado imperativamente pelo próprio handler.
-    const points = useRef<NdcPoint[]>([]);
-    //traço FECHADO (soltou o botão com pontos suficientes) vs. em andamento
-    const closed = useRef(false);
-    const stroke = useRef<{ pointerId: number; lastX: number; lastY: number } | null>(null);
+    //
+    //current = o traço em andamento; committed = os que já fecharam nesta
+    //sessão, guardados aqui só pra DESENHAR (a fonte de verdade deles é o
+    //redux, e o id é o que liga um ao outro).
+    const current = useRef<NdcPoint[]>([]);
+    const committed = useRef<{ id: number; pts: NdcPoint[] }[]>([]);
+    const stroke = useRef<{
+        pointerId: number;
+        lastX: number;
+        lastY: number;
+        //A câmera CONGELADA deste traço, capturada no pointerdown. É por isso
+        //que ela é lida aqui e não no pointerup: no down é que o traço nasce, e
+        //daí em diante a câmera não pode mais mudar (este overlay come os
+        //eventos que a moveriam).
+        clipFromLocal: Mat4;
+    } | null>(null);
     //rect do overlay, cacheado: o pointermove precisa dele pra converter pra
     //NDC, e ler getBoundingClientRect a cada evento é trabalho à toa.
     const rect = useRef<DOMRect | null>(null);
@@ -66,11 +92,46 @@ export function LassoCaptureOverlay() {
         }
         //limpa em CSS px: o setTransform do resize já pôs o dpr na matriz
         ctx.clearRect(0, 0, r.width, r.height);
-        const pts = points.current;
+        ctx.lineJoin = "round";
+        ctx.lineCap = "round";
+        //O contexto é o mesmo objeto entre draws: começar zerando o dash evita
+        //que o tracejado da corda vaze pro desenho seguinte.
+        ctx.setLineDash([]);
+
+        //Os fechados: contorno + interior translúcido (a prévia do que sumiria).
+        //Regra NONZERO (o default do canvas), e não even-odd: lasso à mão livre
+        //se auto-intersecta o tempo todo, e o nonzero é o que casa com "tudo que
+        //eu cerquei". Quando o teste entrar no shader, tem que ser a MESMA regra
+        //— senão a prévia mente sobre o corte.
+        for (const lasso of committed.current) {
+            tracePath(ctx, lasso.pts, r);
+            ctx.closePath();
+            ctx.fillStyle = FILL;
+            ctx.fill();
+            strokeTwice(ctx, 3.5, 1.5);
+        }
+
+        //O traço em andamento: aberto, com a corda tracejada do último ponto até
+        //o primeiro mostrando por onde o polígono VAI fechar.
+        const pts = current.current;
         if (pts.length < 2) {
             return;
         }
+        tracePath(ctx, pts, r);
+        ctx.setLineDash([]);
+        strokeTwice(ctx, 3.5, 1.5);
 
+        const [x0, y0] = ndcToCss(pts[0], r);
+        const [xn, yn] = ndcToCss(pts[pts.length - 1], r);
+        ctx.beginPath();
+        ctx.moveTo(xn, yn);
+        ctx.lineTo(x0, y0);
+        ctx.setLineDash([4, 4]);
+        strokeTwice(ctx, 3.5, 1);
+        ctx.setLineDash([]);
+    }
+
+    function tracePath(ctx: CanvasRenderingContext2D, pts: NdcPoint[], r: DOMRect) {
         ctx.beginPath();
         const [x0, y0] = ndcToCss(pts[0], r);
         ctx.moveTo(x0, y0);
@@ -78,44 +139,17 @@ export function LassoCaptureOverlay() {
             const [x, y] = ndcToCss(pts[i], r);
             ctx.lineTo(x, y);
         }
+    }
 
-        //Preenchimento só no traço fechado — é a prévia do que vai sumir.
-        //Regra NONZERO (o default do canvas), e não even-odd: lasso à mão livre
-        //se auto-intersecta o tempo todo, e o nonzero é o que casa com "tudo que
-        //eu cerquei". Quando o teste entrar no shader, tem que ser a MESMA regra
-        //— senão a prévia mente sobre o corte.
-        if (closed.current) {
-            ctx.closePath();
-            ctx.fillStyle = FILL;
-            ctx.fill();
-        }
-
-        ctx.lineJoin = "round";
-        ctx.lineCap = "round";
-        ctx.setLineDash([]);
-        ctx.lineWidth = 3.5;
+    //Halo escuro por baixo, tinta clara por cima — o que dá contraste sobre
+    //qualquer coisa que o volume esteja mostrando ali atrás.
+    function strokeTwice(ctx: CanvasRenderingContext2D, halo: number, ink: number) {
+        ctx.lineWidth = halo;
         ctx.strokeStyle = HALO;
         ctx.stroke();
-        ctx.lineWidth = 1.5;
+        ctx.lineWidth = ink;
         ctx.strokeStyle = INK;
         ctx.stroke();
-
-        //Enquanto desenha, a corda tracejada do último ponto até o primeiro
-        //mostra por onde o polígono VAI fechar quando soltar o botão.
-        if (!closed.current) {
-            const [xn, yn] = ndcToCss(pts[pts.length - 1], r);
-            ctx.beginPath();
-            ctx.moveTo(xn, yn);
-            ctx.lineTo(x0, y0);
-            ctx.setLineDash([4, 4]);
-            ctx.lineWidth = 3.5;
-            ctx.strokeStyle = HALO;
-            ctx.stroke();
-            ctx.lineWidth = 1;
-            ctx.strokeStyle = INK;
-            ctx.stroke();
-            ctx.setLineDash([]);
-        }
     }
 
     //Tamanho do backing store = CSS × dpr, senão a linha sai borrada em tela
@@ -143,18 +177,18 @@ export function LassoCaptureOverlay() {
         return () => observer.disconnect();
     }, []);
 
-    function clearLasso() {
-        points.current = [];
-        closed.current = false;
-        stroke.current = null;
-        draw();
-    }
-
     function onPointerDown(e: ReactPointerEvent<HTMLCanvasElement>) {
-        //RMB CANCELA — tanto o traço em andamento quanto o já fechado. Sai
-        //antes de qualquer coisa pra o botão direito nunca começar traço.
+        //RMB CANCELA O TRAÇO EM ANDAMENTO — e só isso. Sem traço na mão ele não
+        //faz nada: apagar um lasso JÁ FECHADO é undo, e undo vai ser botão
+        //próprio na UI. Escondido num botão do mouse ele seria destrutivo e
+        //invisível — clique errado apaga trabalho sem nada na tela dizendo que
+        //dá pra apagar.
         if (e.button === 2) {
-            clearLasso();
+            if (stroke.current) {
+                stroke.current = null;
+                current.current = [];
+                draw();
+            }
             return;
         }
         //só LMB desenha; miolo/laterais não fazem nada
@@ -165,13 +199,16 @@ export function LassoCaptureOverlay() {
         //layout ter mudado sem o observer ter corrido ainda
         const r = e.currentTarget.getBoundingClientRect();
         rect.current = r;
-        //traço novo substitui o anterior — um lasso por vez nesta etapa
-        points.current = [{
+        current.current = [{
             x: ((e.clientX - r.left) / r.width) * 2 - 1,
             y: 1 - ((e.clientY - r.top) / r.height) * 2,
         }];
-        closed.current = false;
-        stroke.current = { pointerId: e.pointerId, lastX: e.clientX, lastY: e.clientY };
+        stroke.current = {
+            pointerId: e.pointerId,
+            lastX: e.clientX,
+            lastY: e.clientY,
+            clipFromLocal: world.captureClipFromLocal(),
+        };
         //captura: o move continua chegando mesmo se o ponteiro sair do overlay
         //(mesmo idioma do OrbitControls e do FloatingPanel)
         e.currentTarget.setPointerCapture(e.pointerId);
@@ -191,7 +228,7 @@ export function LassoCaptureOverlay() {
         }
         s.lastX = e.clientX;
         s.lastY = e.clientY;
-        points.current.push({
+        current.current.push({
             x: ((e.clientX - r.left) / r.width) * 2 - 1,
             y: 1 - ((e.clientY - r.top) / r.height) * 2,
         });
@@ -204,21 +241,34 @@ export function LassoCaptureOverlay() {
             return;
         }
         stroke.current = null;
-        //clique sem arrasto não é lasso: limpa em vez de deixar um polígono
-        //degenerado na tela
-        if (points.current.length < MIN_POINTS) {
-            clearLasso();
+        const pts = current.current;
+        current.current = [];
+        //clique sem arrasto não é lasso: some em vez de virar um polígono
+        //degenerado
+        if (pts.length < MIN_POINTS) {
+            draw();
             return;
         }
-        //fecha implicitamente (último→primeiro), como todo lasso: o usuário não
-        //precisa acertar o ponto de partida
-        closed.current = true;
+        //Fecha implicitamente (último→primeiro), como todo lasso: o usuário não
+        //precisa acertar o ponto de partida — e por isso o primeiro ponto NÃO é
+        //repetido no fim do array.
+        const id = nextLassoId();
+        committed.current.push({ id, pts });
+        //Achata pro formato que o shader vai consumir: x,y intercalados.
+        const points = new Float32Array(pts.length * 2);
+        for (let i = 0; i < pts.length; i++) {
+            points[i * 2] = pts[i].x;
+            points[i * 2 + 1] = pts[i].y;
+        }
+        dispatch(lassoAdded({ id, points, clipFromLocal: s.clipFromLocal }));
         draw();
     }
 
     function onPointerCancel(e: ReactPointerEvent<HTMLCanvasElement>) {
         if (stroke.current?.pointerId === e.pointerId) {
-            clearLasso();
+            stroke.current = null;
+            current.current = [];
+            draw();
         }
     }
 

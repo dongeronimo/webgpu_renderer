@@ -6,6 +6,7 @@
 //por aqui — vive no scene graph e a UI lê por polling (usePolled).
 
 import type { CtfPoint } from "../ctf";
+import type { LassoData } from "../raycastLasso/lassoData";
 
 export const HELLO_CLICKED = "HELLO_CLICKED";
 //nome == valor: é o VALOR que aparece em logs/devtools, e grep tem que achar
@@ -52,12 +53,25 @@ export const SET_RAYCAST_ESS = "SET_RAYCAST_ESS";
 //PiP de debug do ESS: liga/desliga o quadzinho com os cubos dos chunks mantidos.
 //Gateia PASSES de render (lido no render() do world), não é estado de nó.
 export const SET_RAYCAST_ESS_DEBUG = "SET_RAYCAST_ESS_DEBUG";
+//Debug view das MÁSCARAS do lasso (mundo raycastLasso): em vez de remover a
+//região dos lassos, o raymarch a PINTA. Diferente do debug do ESS, que é um
+//pass próprio num PiP, este vive dentro do próprio raycaster — a região só
+//existe projetada ao longo do raio, então precisa do volume renderer pra
+//aparecer. Vai pros params do material (a behaviour lê e repassa).
+export const SET_LASSO_DEBUG_VIEW = "SET_LASSO_DEBUG_VIEW";
 //Ferramenta ARMADA na barra de tools (mundo raycastLasso por ora). O state é
 //UM valor e não um conjunto de flags de propósito: a exclusão mútua fica
 //ESTRUTURAL — não existe estado representável com dois tools armados pra
 //alguém esquecer de desligar. Quem consome é a UI (qual botão está aceso) e,
 //da F1 em diante, o overlay de captura (quem come os eventos do ponteiro).
 export const SET_ACTIVE_TOOL = "SET_ACTIVE_TOOL";
+//Um lasso foi FECHADO (o usuário soltou o botão) ou REMOVIDO (botão direito).
+//É intenção de baixa frequência — um punhado de eventos por sessão, cada um
+//uma edição que o usuário vai querer desfazer —, então cabe no redux mesmo
+//carregando uma matriz dentro. O que NÃO passaria por aqui é o traço em
+//andamento: esse é por-frame e vive no overlay até fechar.
+export const LASSO_ADDED = "LASSO_ADDED";
+export const LASSO_REMOVED = "LASSO_REMOVED";
 //Gauntlet: o form de login (UI) fez o POST /login e o server aceitou — a
 //credencial REAL daqui em diante é o cookie de sessão, não user/senha (por
 //isso a senha nunca entra no state: nenhum consumidor precisa dela depois
@@ -186,6 +200,22 @@ export interface SetRaycastEssDebugAction {
     payload: boolean;
 }
 
+export interface SetLassoDebugViewAction {
+    type: typeof SET_LASSO_DEBUG_VIEW;
+    payload: boolean;
+}
+
+export interface LassoAddedAction {
+    type: typeof LASSO_ADDED;
+    payload: LassoData;
+}
+
+export interface LassoRemovedAction {
+    type: typeof LASSO_REMOVED;
+    /** id do lasso a remover (e não o índice: a lista muda debaixo de quem pede). */
+    payload: number;
+}
+
 export interface SetActiveToolAction {
     type: typeof SET_ACTIVE_TOOL;
     payload: ToolName;
@@ -280,6 +310,18 @@ export function setRaycastEssDebugView(enabled: boolean): SetRaycastEssDebugActi
     return { type: SET_RAYCAST_ESS_DEBUG, payload: enabled };
 }
 
+export function setLassoDebugView(enabled: boolean): SetLassoDebugViewAction {
+    return { type: SET_LASSO_DEBUG_VIEW, payload: enabled };
+}
+
+export function lassoAdded(lasso: LassoData): LassoAddedAction {
+    return { type: LASSO_ADDED, payload: lasso };
+}
+
+export function lassoRemoved(id: number): LassoRemovedAction {
+    return { type: LASSO_REMOVED, payload: id };
+}
+
 export function setActiveTool(tool: ToolName): SetActiveToolAction {
     return { type: SET_ACTIVE_TOOL, payload: tool };
 }
@@ -323,6 +365,9 @@ export type AppAction =
     | SetRaycastEssAction
     | SetRaycastEssDebugAction
     | SetActiveToolAction
+    | SetLassoDebugViewAction
+    | LassoAddedAction
+    | LassoRemovedAction
     | GauntletLoginSucceededAction
     | SetGauntletShadowMapSizeAction
     | GauntletSetCharacterScreenAction

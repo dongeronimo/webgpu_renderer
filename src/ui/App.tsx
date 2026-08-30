@@ -117,7 +117,7 @@ function WorldUi({ world }: { world: World }) {
     if (world instanceof RaycastLassoWorld) {
         return (
             <div>
-                <RaycastESSRenderProperties/>
+                <RaycastESSRenderProperties showLassoMasks/>
                 <ToolsPanel/>
             </div>
         );
@@ -158,7 +158,8 @@ export function App({ world }: { world: World }) {
                depois pinta em cima e leva TODO evento de ponteiro — é esta ordem
                (e não um if no OrbitControls) que congela a câmera enquanto o
                lasso está armado. Antes dos painéis, senão cobriria eles também.*/}
-            {world instanceof RaycastLassoWorld && activeTool === "lasso" && <LassoCaptureOverlay />}
+            {world instanceof RaycastLassoWorld && activeTool === "lasso"
+                && <LassoCaptureOverlay world={world} />}
             {/*Editor de CTF: painel próprio, nos mundos que consomem o state ctf
                (CT + os raycasters). A CTF é da modalidade, então o mesmo editor
                serve os três — e editar aqui estressa o recálculo do skip-map.*/}

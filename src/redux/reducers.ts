@@ -2,8 +2,9 @@
 //switch e spread — sem toolkit, sem immer.
 import { combineReducers } from "redux";
 import type { CtfPoint } from "../ctf";
+import type { LassoData } from "../raycastLasso/lassoData";
 import { defaultWorld } from "../appConfig";
-import { CTF_SET_POINTS, GAUNTLET_CHARACTER_CHOSEN, GAUNTLET_CHOOSING_CHARACTER, GAUNTLET_LOGIN_SUCCEEDED, HELLO_CLICKED, ORBIT_CAMERA, SET_ACTIVE_TOOL, SET_ALPHA_SCALE, SET_CTF_HU_RANGE, SET_DEBUG_VIEW_ACTIVE, SET_GAUNTLET_SHADOW_MAP_SIZE, SET_LOADING, SET_RAYCAST_ESS, SET_RAYCAST_ESS_DEBUG, SET_RAYCAST_FRAMEBUFFER_SCALE, SET_RAYCAST_GRADIENT_MODE, SET_RAYCAST_GRADIENT_SHADING, SWITCH_WORLD, TEXTURE_BASED_CT_SET_NUM_SLICES, ZOOM_CAMERA, type AppAction, type GradientMode, type ToolName, type WorldName } from "./actions";
+import { CTF_SET_POINTS, GAUNTLET_CHARACTER_CHOSEN, LASSO_ADDED, LASSO_REMOVED, SET_LASSO_DEBUG_VIEW, GAUNTLET_CHOOSING_CHARACTER, GAUNTLET_LOGIN_SUCCEEDED, HELLO_CLICKED, ORBIT_CAMERA, SET_ACTIVE_TOOL, SET_ALPHA_SCALE, SET_CTF_HU_RANGE, SET_DEBUG_VIEW_ACTIVE, SET_GAUNTLET_SHADOW_MAP_SIZE, SET_LOADING, SET_RAYCAST_ESS, SET_RAYCAST_ESS_DEBUG, SET_RAYCAST_FRAMEBUFFER_SCALE, SET_RAYCAST_GRADIENT_MODE, SET_RAYCAST_GRADIENT_SHADING, SWITCH_WORLD, TEXTURE_BASED_CT_SET_NUM_SLICES, ZOOM_CAMERA, type AppAction, type GradientMode, type ToolName, type WorldName } from "./actions";
 
 export interface HelloState {
     /** Quantas vezes o botão de hello foi clicado. */
@@ -64,6 +65,11 @@ export interface RaycastState {
     essEnabled: boolean;
     //PiP de debug do ESS (cubos dos chunks mantidos) visível?
     essDebugView: boolean;
+    //Debug view das máscaras do lasso (mundo raycastLasso): pinta a região dos
+    //lassos em vez de removê-la. Mora aqui, junto do essDebugView, porque é a
+    //mesma natureza — knob de debug de uma técnica de render, lido pelo
+    //material. O que os lassos SÃO mora no slice lasso; isto é só como mostrá-los.
+    lassoDebugView: boolean;
 }
 
 /**
@@ -77,6 +83,20 @@ export interface RaycastState {
  */
 export interface ToolsState {
     activeTool: ToolName;
+}
+
+/**
+ * Os lassos já fechados, na ordem em que foram desenhados. Slice separado do
+ * tools de propósito: "que ferramenta está na mão" é modo de interação e
+ * morre na troca de mundo; os lassos são o DOCUMENTO — o trabalho do usuário,
+ * que sobrevive a soltar a ferramenta, a trocar de mundo e (quando ela vier)
+ * à pilha de undo/redo.
+ *
+ * Cada item carrega a câmera dele junto (ver LassoData): sem isso, dois lassos
+ * desenhados de ângulos diferentes seriam indistinguíveis aqui dentro.
+ */
+export interface LassoState {
+    items: LassoData[];
 }
 
 /**
@@ -179,6 +199,9 @@ const raycastInitial: RaycastState = {
     framebufferScale : 1.0,
     essEnabled: true,
     essDebugView: true,
+    //off por default: com lasso nenhum desenhado ele não faria nada mesmo, e
+    //ligado por engano esconderia que o corte ainda não está cortando.
+    lassoDebugView: false,
 };
 
 //Pitch máximo (~89°): abaixo do polo, onde o up (0,1,0) do lookAt ficaria
@@ -279,6 +302,8 @@ function raycastReducer(state: RaycastState = raycastInitial, action: AppAction)
             return { ...state, essEnabled: action.payload };
         case SET_RAYCAST_ESS_DEBUG:
             return { ...state, essDebugView: action.payload };
+        case SET_LASSO_DEBUG_VIEW:
+            return { ...state, lassoDebugView: action.payload };
         default:
             return state;
     }
@@ -317,6 +342,25 @@ function toolsReducer(state: ToolsState = toolsInitial, action: AppAction): Tool
     }
 }
 
+const lassoInitial: LassoState = { items: [] };
+
+//Array NOVO a cada mudança (nunca push in-place): é a troca de referência que
+//a behaviour do material vai detectar pra reenviar os lassos pra GPU, o mesmo
+//contrato do ctfReducer.
+function lassoReducer(state: LassoState = lassoInitial, action: AppAction): LassoState {
+    switch (action.type) {
+        case LASSO_ADDED:
+            return { ...state, items: [...state.items, action.payload] };
+        case LASSO_REMOVED:
+            return { ...state, items: state.items.filter((l) => l.id !== action.payload) };
+        //SEM reset no SWITCH_WORLD, ao contrário do tools: sair do mundo e
+        //voltar não pode jogar fora o recorte que o usuário fez — as matrizes
+        //continuam válidas (o model do volume é remontado idêntico).
+        default:
+            return state;
+    }
+}
+
 export const rootReducer = combineReducers({
     hello: helloReducer,
     base: baseReducer,
@@ -325,6 +369,7 @@ export const rootReducer = combineReducers({
     camera: cameraReducer,
     raycast: raycastReducer,
     tools: toolsReducer,
+    lasso: lassoReducer,
     gauntlet: gauntletReducer,
 });
 

@@ -1,4 +1,4 @@
-import { vec3 } from "wgpu-matrix";
+import { mat4, vec3, type Mat4 } from "wgpu-matrix";
 import { Camera } from "../camera";
 import { FinalRenderPass } from "../finalPass";
 import { MeshRenderPass } from "../meshPass";
@@ -137,6 +137,12 @@ export class RaycastLassoWorld extends World {
             initialCtf, metadata.histogramBins, metadata.histogramMin, metadata.histogramMax,
         );
         this.material.setSkipMap(computeSkipMap(occupancy, initialMask));
+        //Lassos INICIAIS: a lista sobrevive à troca de mundo (é o documento do
+        //usuário, não o modo de interação), então sair daqui e voltar tem que
+        //reencontrar os recortes. A behaviour só reage a MUDANÇAS — o estado
+        //de partida é do world, mesmo padrão do skip-map acima.
+        this.material.setLassos(store.getState().lasso.items);
+        this.material.setLassoDebug(store.getState().raycast.lassoDebugView);
 
         //O proxy: o cubo unitário [-0.5,0.5]³ = a caixa do volume.
         const cube = await loadGltf(this.device, "/models/unitary_cube.glb");
@@ -184,6 +190,29 @@ export class RaycastLassoWorld extends World {
         volumeNode.behaviours.push(brain);
 
         this.root.addBehaviour(new FramebufferResizerBehaviour());
+    }
+
+    /**
+     * A matriz que CONGELA a câmera pra um lasso: leva o ponto do espaço local
+     * do volume (o cubo [-0.5,0.5]³ do raymarch) pro clip de agora.
+     *
+     *     clipFromLocal = proj · view · model
+     *
+     * view é a inversa da worldMatrix do nó da câmera (mesma conta do
+     * MeshRenderPass — a câmera não guarda view, ela vem do nó dono) e model é
+     * a worldMatrix do nó do volume. Compor as três AQUI e não no shader deixa
+     * o lasso com uma matriz só, e amarra o corte ao volume: girar o nó do
+     * volume depois gira a região removida junto.
+     *
+     * É o canal engine→UI de sempre (o overlay lê o scene graph, como a
+     * TerraPositionTable lê a worldMatrix) — nada disso passa pelo redux, que
+     * carrega intenção e não estado por-frame. Devolve matriz NOVA a cada
+     * chamada: quem pediu vira dono dela e a guarda dentro do LassoData.
+     */
+    captureClipFromLocal(): Mat4 {
+        const view = mat4.invert(this.camera.worldMatrix);
+        const proj = this.camera.camera!.getProjectionMatrix();
+        return mat4.multiply(mat4.multiply(proj, view), this.volumeNode.worldMatrix);
     }
 
     resizeFramebuffer(factor: number) {

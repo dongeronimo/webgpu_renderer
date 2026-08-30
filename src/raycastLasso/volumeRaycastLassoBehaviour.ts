@@ -22,6 +22,11 @@ export class VolumeRaycastLassoBehaviour extends Behaviour {
     private lastGradientEnabled = store.getState().raycast.gradientEnabled;
     private lastGradientMode = store.getState().raycast.gradientMode;
     private lastEssEnabled = store.getState().raycast.essEnabled;
+    //Os lassos, pelo MESMO critério da CTF: comparação por referência. O
+    //lassoReducer cria array novo a cada adição/remoção, então "mudou" é
+    //`!==` e nada de varrer a lista todo frame.
+    private lastLassos = store.getState().lasso.items;
+    private lastLassoDebug = store.getState().raycast.lassoDebugView;
 
     constructor(
         private readonly material: VolumeRaycastLassoMaterial,
@@ -66,6 +71,20 @@ export class VolumeRaycastLassoBehaviour extends Behaviour {
         if (raycast.essEnabled !== this.lastEssEnabled) {
             this.lastEssEnabled = raycast.essEnabled;
             this.material.setEmptySpaceSkip(raycast.essEnabled);
+        }
+        //LASSOS: fechou um no overlay (ou o undo tirou um), a referência troca
+        //e o material recebe a lista nova. Rebuild de recurso de GPU é caro, e
+        //por isso mora aqui e não num subscribe do redux: acontece UMA vez por
+        //edição, no update do frame seguinte, e nunca no meio de um frame.
+        const lassos = store.getState().lasso.items;
+        if (lassos !== this.lastLassos) {
+            this.lastLassos = lassos;
+            this.material.setLassos(lassos);
+        }
+        //Debug view das máscaras: só um float nos params, sem rebuild nenhum.
+        if (raycast.lassoDebugView !== this.lastLassoDebug) {
+            this.lastLassoDebug = raycast.lassoDebugView;
+            this.material.setLassoDebug(raycast.lassoDebugView);
         }
     }
 }

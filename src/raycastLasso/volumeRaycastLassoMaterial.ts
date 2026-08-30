@@ -31,6 +31,8 @@
 import { bakePreIntegrationTable, PREINT_TABLE_SIZE, type CtfPoint } from "../ctf";
 import { Material, type PipelineContext } from "../material";
 import { MeshType, StaticMesh } from "../mesh";
+import type { LassoData } from "./lassoData";
+import { LASSO_MASK_SIZE, rasterizeLassoMask } from "./lassoMask";
 
 const DEFAULT_STEP_SIZE = 1 / 256;
 
@@ -64,8 +66,13 @@ struct Params {
     chunkSize: f32,    //lado do chunk em VOXELS
     //---
     spacing: vec3f,    //mm por voxel em x,y,z (vec3f alinha em 16 → offset 32)
+    //Os dois campos abaixo ocupam o PADDING dos vec3f (offsets 44 e 60): vec3f
+    //tem tamanho 12 e alinhamento 16, então um f32 logo depois entra no buraco
+    //de graça — o uniform continua com 64 bytes.
+    lassoCount: f32,   //quantos lassos vigentes (offset 44)
     //---
     numChunks: vec3f,  //nº de chunks por eixo (f32 → u32 no shader; offset 48)
+    lassoDebug: f32,   //>0.5 PINTA a região dos lassos em vez de cortar (offset 60)
 };
 @group(2) @binding(0) var<uniform> params: Params;
 @group(2) @binding(1) var samp: sampler;
@@ -73,12 +80,48 @@ struct Params {
 @group(2) @binding(3) var preint: texture_2d<f32>; //tabela pré-integrada T[sf][sb]
 @group(2) @binding(4) var gradient: texture_3d<f32>; //o gradiente pré-calculado
 @group(2) @binding(5) var<storage, read> occupied: array<u32>; //skip-map: 1=processa, 0=pula
+//As máscaras dos lassos, uma CAMADA por lasso (r8unorm: 255 dentro, 0 fora),
+//rasterizadas na CPU quando a lista muda — ver lassoMask.ts.
+@group(2) @binding(6) var lassoMasks: texture_2d_array<f32>;
+//A câmera congelada de cada lasso, na MESMA ordem das camadas: leva pLocal
+//direto pro clip daquele lasso (proj·view·model, composta na CPU).
+@group(2) @binding(7) var<storage, read> lassoClip: array<mat4x4f>;
 
 const REFERENCE_SLICE_COUNT: f32 = 128.0;
 const MAX_STEPS: i32 = 512;
 //Nudge pra o salto de skip pousar DENTRO do próximo chunk (senão pode reler o
 //mesmo e travar). Em unidades de t (rd é normalizado no espaço local, caixa=1).
 const SKIP_EPS: f32 = 1e-4;
+
+//Cor do debug das máscaras: magenta, que não existe em CT nenhuma — cinza de
+//tecido e branco de osso nunca vão ser confundidos com ela.
+const LASSO_DEBUG_TINT = vec3f(1.0, 0.15, 0.55);
+
+//O ponto (espaço LOCAL do volume) cai dentro de algum lasso?
+//
+//Projeta com a matriz congelada daquele lasso e consulta a máscara. Sem
+//hoisting de A/B pra fora do laço de propósito: com N dinâmico, os A/B
+//viveriam num array de tamanho fixo indexado dinamicamente, que a GPU joga em
+//memória privada (spill) — sairia mais caro que refazer a mat4×vec4 aqui.
+fn insideAnyLasso(pLocal: vec3f, count: u32) -> bool {
+    for (var i = 0u; i < count; i = i + 1u) {
+        let c = lassoClip[i] * vec4f(pLocal, 1.0);
+        //Atrás do olho congelado: projeta espelhado, cairia no polígono errado.
+        if (c.w <= 0.0) {
+            continue;
+        }
+        //NDC → uv, com o y invertido (NDC cresce pra cima, v cresce pra baixo).
+        //Fora de [0,1] o clamp-to-edge devolve o anel de borda, que a
+        //rasterização zera de propósito — ou seja, "fora".
+        let uv = vec2f(c.x / c.w, -c.y / c.w) * 0.5 + vec2f(0.5);
+        //textureSampleLevel (LOD explícito) é válido em fluxo não-uniforme;
+        //textureSample não seria, e este "if" é exatamente isso.
+        if (textureSampleLevel(lassoMasks, samp, uv, i, 0.0).r > 0.5) {
+            return true;
+        }
+    }
+    return false;
+}
 
 struct VsOut {
     @builtin(position) position: vec4f,
@@ -150,6 +193,8 @@ fn fs(in: VsOut) -> @location(0) vec4f {
     let chunkCell = vec3f(params.chunkSize) / vec3f(textureDimensions(volume));
     let nChunks = vec3u(u32(params.numChunks.x), u32(params.numChunks.y), u32(params.numChunks.z));
     let nChunksMax = vec3f(nChunks) - vec3f(1.0);
+    //uniforme: sai do laço
+    let lassoCount = u32(params.lassoCount);
 
     var acc = vec4f(0.0);
     var t = tNear;
@@ -178,12 +223,6 @@ fn fs(in: VsOut) -> @location(0) vec4f {
             }
         }
 
-        //LASSO: é AQUI que o corte entra. O teste é por SEGMENTO (uvw até
-        //uvw+rd*step), não por amostra — a CTF pré-integrada indexa T[sf][sb] e
-        //cortar só uma das pontas produz um par que não existe. Dentro de algum
-        //lasso de remoção ⇒ "t = t + step; continue;" (nem amostra, nem acumula).
-        //A projeção do ponto sai de A + B*t (afim em t, ver cabeçalho): os A/B
-        //vêm hoisted de fora do laço, junto do chunkCell.
         let sf = textureSampleLevel(volume, samp, uvw, 0.0).r;
         let sb = textureSampleLevel(volume, samp, uvw + rd * step, 0.0).r;
         let uf = (sf - params.ctfMin) / range;
@@ -220,6 +259,21 @@ fn fs(in: VsOut) -> @location(0) vec4f {
             }
         }
 
+        //LASSO (debug): pinta o que SERIA removido, em vez de remover. O corte
+        //de verdade é a mesma condição com "t = t + step; continue;" no lugar
+        //do mix — e é só isso que falta.
+        //
+        //O ponto de teste é o MÉDIO do segmento, e não pLocal: a CTF
+        //pré-integrada consome o segmento inteiro (sf em uvw, sb em uvw+rd*step)
+        //e indexa T[sf][sb], então o corte terá que descartar o SEGMENTO, não a
+        //amostra. Testando o mesmo ponto agora, o que o debug pinta é
+        //exatamente o que vai sumir depois.
+        if (params.lassoDebug > 0.5 && lassoCount > 0u) {
+            if (insideAnyLasso(pLocal + rd * (step * 0.5), lassoCount)) {
+                rgb = mix(rgb, LASSO_DEBUG_TINT, 0.75);
+            }
+        }
+
         let aRef = clamp(c.a * params.alphaScale, 0.0, 1.0);
         let alpha = 1.0 - pow(1.0 - aRef, opacityExponent);
         let w = (1.0 - acc.a) * alpha;
@@ -251,6 +305,9 @@ export class VolumeRaycastLassoMaterial extends Material {
                     { binding: 4, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: "float", viewDimension: "3d" } },
                     //o skip-map: storage read-only no fragment (igual aos models do grupo 1)
                     { binding: 5, visibility: GPUShaderStage.FRAGMENT, buffer: { type: "read-only-storage" } },
+                    //máscaras dos lassos (1 camada por lasso) + as matrizes congeladas
+                    { binding: 6, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: "float", viewDimension: "2d-array" } },
+                    { binding: 7, visibility: GPUShaderStage.FRAGMENT, buffer: { type: "read-only-storage" } },
                 ],
             });
         }
@@ -323,7 +380,12 @@ export class VolumeRaycastLassoMaterial extends Material {
     private readonly paramsBuffer: GPUBuffer;
     //o skip-map (1 u32/chunk); a CPU o preenche via setSkipMap
     private readonly occupiedBuffer: GPUBuffer;
-    private readonly bindGroup: GPUBindGroup;
+    //Os recursos dos lassos são RECRIADOS a cada mudança da lista (o número de
+    //camadas de um texture_2d_array é fixo na criação), e por isso o bind group
+    //também é — nada disso pode ser readonly.
+    private lassoMaskTexture!: GPUTexture;
+    private lassoClipBuffer!: GPUBuffer;
+    private bindGroup!: GPUBindGroup;
     private ctfMin = 0;
     private ctfMax = 1;
     private alphaScale: number;
@@ -331,6 +393,11 @@ export class VolumeRaycastLassoMaterial extends Material {
     private useGradient: number;
     private gradientType: number;
     private useSkip: number;
+    private lassoDebug = 0;
+    //Os lassos vigentes. Guardados como VIERAM (a lista do redux é imutável:
+    //o reducer cria array novo a cada mudança), pra o rebuild dos recursos de
+    //GPU ter de onde partir sem depender de quem chamou.
+    private lassos: readonly LassoData[] = [];
     private readonly spacing: [number, number, number];
     private readonly numChunksX: number;
     private readonly numChunksY: number;
@@ -396,16 +463,66 @@ export class VolumeRaycastLassoMaterial extends Material {
         this.setSkipMap(new Uint32Array(chunkGrid.totalChunks).fill(1));
         this.setCtf(ctfPoints); //bakeia a tabela + escreve os params
 
-        this.bindGroup = device.createBindGroup({
+        //Sem lasso nenhum ainda, mas o layout exige os recursos: nascem no
+        //tamanho mínimo (1 camada de 1×1) e o world/behaviour os trocam.
+        this.createLassoResources([]);
+        this.rebuildBindGroup();
+    }
+
+    /**
+     * (Re)cria a textura de máscaras e o buffer de matrizes pra lista dada.
+     * Uma camada por lasso; SEM lasso, uma camada de 1×1 zerada — o bind group
+     * layout exige os dois recursos existindo, mesmo vazios, e alocar 512² pra
+     * nada seria desperdício.
+     */
+    private createLassoResources(lassos: readonly LassoData[]): void {
+        const layers = Math.max(lassos.length, 1);
+        const size = lassos.length > 0 ? LASSO_MASK_SIZE : 1;
+        this.lassoMaskTexture = this.device.createTexture({
+            label: "VolumeRaycastLassoMaterial lasso masks",
+            size: [size, size, layers],
+            dimension: "2d",
+            format: "r8unorm",
+            usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST,
+        });
+        //Rasterização na CPU, uma vez por lasso por edição — alguns ms, e só
+        //quando a referência da lista troca (a behaviour é quem detecta).
+        for (let i = 0; i < lassos.length; i++) {
+            const mask = rasterizeLassoMask(lassos[i].points, LASSO_MASK_SIZE);
+            this.device.queue.writeTexture(
+                { texture: this.lassoMaskTexture, origin: [0, 0, i] },
+                mask,
+                { bytesPerRow: LASSO_MASK_SIZE, rowsPerImage: LASSO_MASK_SIZE },
+                [LASSO_MASK_SIZE, LASSO_MASK_SIZE, 1],
+            );
+        }
+        //As matrizes na mesma ordem das camadas: o índice do laço do shader
+        //serve pros dois.
+        const matrices = new Float32Array(layers * 16);
+        for (let i = 0; i < lassos.length; i++) {
+            matrices.set(lassos[i].clipFromLocal, i * 16);
+        }
+        this.lassoClipBuffer = this.device.createBuffer({
+            label: "VolumeRaycastLassoMaterial lasso matrices",
+            size: matrices.byteLength,
+            usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
+        });
+        this.device.queue.writeBuffer(this.lassoClipBuffer, 0, matrices);
+    }
+
+    private rebuildBindGroup(): void {
+        this.bindGroup = this.device.createBindGroup({
             label: "VolumeRaycastLassoMaterial instance",
-            layout: VolumeRaycastLassoMaterial.getMaterialBindGroupLayout(device),
+            layout: VolumeRaycastLassoMaterial.getMaterialBindGroupLayout(this.device),
             entries: [
                 { binding: 0, resource: { buffer: this.paramsBuffer } },
-                { binding: 1, resource: VolumeRaycastLassoMaterial.getSampler(device) },
+                { binding: 1, resource: VolumeRaycastLassoMaterial.getSampler(this.device) },
                 { binding: 2, resource: this.volumeTexture.createView({ dimension: "3d" }) },
                 { binding: 3, resource: this.preintTexture.createView() },
                 { binding: 4, resource: this.gradientTexture.createView({ dimension: "3d" }) },
                 { binding: 5, resource: { buffer: this.occupiedBuffer } },
+                { binding: 6, resource: this.lassoMaskTexture.createView({ dimension: "2d-array" }) },
+                { binding: 7, resource: { buffer: this.lassoClipBuffer } },
             ],
         });
     }
@@ -449,17 +566,52 @@ export class VolumeRaycastLassoMaterial extends Material {
         this.device.queue.writeBuffer(this.occupiedBuffer, 0, occupied);
     }
 
+    /**
+     * Troca a lista de lassos vigente. Chamado pelo world na criação (a lista
+     * sobrevive à troca de mundo, então um world novo pode já nascer com
+     * lassos) e pela behaviour toda vez que a referência do array muda.
+     *
+     * Rasteriza as máscaras, refaz o array de matrizes e RECRIA o bind group
+     * (as camadas do texture_2d_array são fixas na criação, então mudar de
+     * quantidade é destruir e criar de novo — acontece uma vez por edição do
+     * usuário, não por frame).
+     *
+     * Roda no update() da behaviour, nunca no meio de um frame: o main chama
+     * update() antes de render(), então o bind group novo já vale no frame que
+     * está sendo montado.
+     */
+    setLassos(lassos: readonly LassoData[]): void {
+        this.lassos = lassos;
+        this.lassoMaskTexture.destroy();
+        this.lassoClipBuffer.destroy();
+        this.createLassoResources(lassos);
+        this.rebuildBindGroup();
+        this.writeParams(); //lassoCount mudou
+    }
+
+    /** Debug view das máscaras: pinta a região dos lassos em vez de removê-la. */
+    setLassoDebug(enabled: boolean): void {
+        this.lassoDebug = enabled ? 1 : 0;
+        this.writeParams();
+    }
+
+    /** Quantos lassos estão vigentes (o shader vai precisar do mesmo número). */
+    get lassoCount(): number {
+        return this.lassos.length;
+    }
+
     private writeParams(): void {
         //struct Params (uniform std140-ish): spacing:vec3f no byte 32 (índice 8),
-        //numChunks:vec3f no byte 48 (índice 12). Índices 11 e 15 são padding.
+        //numChunks:vec3f no byte 48 (índice 12). Os índices 11 e 15, que eram
+        //padding dos vec3f, hoje carregam lassoCount e lassoDebug.
         this.device.queue.writeBuffer(
             this.paramsBuffer,
             0,
             new Float32Array([
                 this.ctfMin, this.ctfMax, this.alphaScale, this.stepSize,
                 this.useGradient, this.gradientType, this.useSkip, this.chunkSizeVoxels,
-                this.spacing[0], this.spacing[1], this.spacing[2], 0,
-                this.numChunksX, this.numChunksY, this.numChunksZ, 0,
+                this.spacing[0], this.spacing[1], this.spacing[2], this.lassos.length,
+                this.numChunksX, this.numChunksY, this.numChunksZ, this.lassoDebug,
             ]),
         );
     }
@@ -494,5 +646,7 @@ export class VolumeRaycastLassoMaterial extends Material {
         this.preintTexture.destroy();
         this.paramsBuffer.destroy();
         this.occupiedBuffer.destroy();
+        this.lassoMaskTexture.destroy();
+        this.lassoClipBuffer.destroy();
     }
 }
