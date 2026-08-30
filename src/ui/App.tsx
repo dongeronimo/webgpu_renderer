@@ -21,6 +21,7 @@ import { GpuStats } from "./GpuStats";
 import { NetLag } from "./NetLag";
 import { RaycastWorld } from "../raycast/raycastWorld";
 import { RaycastESSWorld } from "../raycastESS/raycastESSWorld";
+import { RaycastLassoWorld } from "../raycastLasso/raycastLassoWorld";
 import { GameVolumeWorld } from "../gameVolume/gameVolumeWorld";
 import { OrbitControls } from "./OrbitControls";
 import RaycastRenderProperties from "./raycast/raycastRenderProperties";
@@ -107,6 +108,13 @@ function WorldUi({ world }: { world: World }) {
             </div>
         )
     }
+    //O mundo do lasso reaproveita o painel do ESS por ora: os knobs são os
+    //mesmos (gradiente, framebuffer scale, alpha, PiP dos chunks) e todos leem o
+    //MESMO state.raycast. O painel próprio do lasso (desenhar/limpar/undo/redo,
+    //lista de lassos) nasce na F1, junto do overlay de captura.
+    if (world instanceof RaycastLassoWorld) {
+        return <RaycastESSRenderProperties/>;
+    }
     if (world instanceof GauntletWorld) {
         return (
             <div>
@@ -130,8 +138,9 @@ export function App({ world }: { world: World }) {
             {/*captura de mouse pra órbita: PRIMEIRO filho de propósito —
                pinta atrás dos painéis, então drag/scroll no vazio orbitam e
                nos painéis continuam sendo do painel. Só nos mundos que orbitam
-               (baseline + ESS, ambos com a OrbitCameraBehaviour).*/}
+               (baseline + ESS + lasso, todos com a OrbitCameraBehaviour).*/}
             {(world instanceof RaycastWorld || world instanceof RaycastESSWorld
+                || world instanceof RaycastLassoWorld
                 || world instanceof GauntletWorld //gambi temporária pra eu ter orbit control no multiplayer
                 || world instanceof GameVolumeWorld) && <OrbitControls />}
             {/*Editor de CTF: painel próprio, nos mundos que consomem o state ctf
@@ -139,7 +148,8 @@ export function App({ world }: { world: World }) {
                serve os três — e editar aqui estressa o recálculo do skip-map.*/}
             {(world instanceof TextureStackVolumeRendererCT
                 || world instanceof RaycastWorld
-                || world instanceof RaycastESSWorld) && <CtfEditorPanel />}
+                || world instanceof RaycastESSWorld
+                || world instanceof RaycastLassoWorld) && <CtfEditorPanel />}
             <WorldSwitch />
             {/*Tela de carga: UI base como o WorldSwitch (sobrevive à troca) e
                por cima de tudo (z-index do ModalPanel). Aparece sozinha lendo

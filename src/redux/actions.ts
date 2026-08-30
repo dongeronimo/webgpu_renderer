@@ -87,6 +87,7 @@ export type WorldName =
     "StarshipDemo" |
     "raycast" |
     "raycastESS" |
+    "raycastLasso" |
     "gameVolume" |
     "train" |
     "SkinningDemo" |
