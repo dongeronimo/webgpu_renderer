@@ -6,7 +6,7 @@ import type { CtfPoint } from "../ctf";
 import type { LassoData } from "../raycastLasso/lassoData";
 import type { ScalpelData } from "../raycastLasso/scalpelData";
 import { defaultWorld } from "../appConfig";
-import { CTF_SET_POINTS, GAUNTLET_CHARACTER_CHOSEN, HISTORY_REDO, HISTORY_UNDO, SET_RAYCAST_AUTO_FRAMEBUFFER, LASSO_ADDED, LASSO_REMOVED, SCALPEL_ADDED, SCALPEL_REMOVED, SET_LASSO_DEBUG_VIEW, SET_SCALPEL_DEBUG_VIEW, SET_SCALPEL_MARGIN, GAUNTLET_CHOOSING_CHARACTER, GAUNTLET_LOGIN_SUCCEEDED, HELLO_CLICKED, ORBIT_CAMERA, SET_ACTIVE_TOOL, SET_ALPHA_SCALE, SET_CTF_HU_RANGE, SET_DEBUG_VIEW_ACTIVE, SET_GAUNTLET_SHADOW_MAP_SIZE, SET_LOADING, SET_RAYCAST_ESS, SET_RAYCAST_ESS_DEBUG, SET_RAYCAST_FRAMEBUFFER_SCALE, SET_RAYCAST_GRADIENT_MODE, SET_RAYCAST_GRADIENT_SHADING, SWITCH_WORLD, TEXTURE_BASED_CT_SET_NUM_SLICES, ZOOM_CAMERA, type AppAction, type GradientMode, type ToolName, type WorldName } from "./actions";
+import { CTF_SET_POINTS, GAUNTLET_CHARACTER_CHOSEN, HISTORY_REDO, HISTORY_UNDO, SET_RAYCAST_AUTO_FRAMEBUFFER, LASSO_ADDED, LASSO_REMOVED, SCALPEL_ADDED, SCALPEL_REMOVED, SET_LASSO_DEBUG_VIEW, SET_SCALPEL_DEBUG_VIEW, SET_SCALPEL_MARGIN, GAUNTLET_CHOOSING_CHARACTER, GAUNTLET_LOGIN_SUCCEEDED, HELLO_CLICKED, ORBIT_CAMERA, PAN_CAMERA, SET_ACTIVE_TOOL, SET_ALPHA_SCALE, SET_CTF_HU_RANGE, SET_DEBUG_VIEW_ACTIVE, SET_GAUNTLET_SHADOW_MAP_SIZE, SET_LOADING, SET_RAYCAST_ESS, SET_RAYCAST_ESS_DEBUG, SET_RAYCAST_FRAMEBUFFER_SCALE, SET_RAYCAST_GRADIENT_MODE, SET_RAYCAST_GRADIENT_SHADING, SWITCH_WORLD, TEXTURE_BASED_CT_SET_NUM_SLICES, ZOOM_CAMERA, type AppAction, type GradientMode, type ToolName, type WorldName } from "./actions";
 
 export interface HelloState {
     /** Quantas vezes o botão de hello foi clicado. */
@@ -133,6 +133,15 @@ export interface CameraState {
     yaw: number;
     pitch: number;
     radius: number;
+    /**
+     * Deslocamento do ALVO da órbita, em unidades de mundo. A câmera continua
+     * orbitando em esféricas — só que em volta de (alvo do mundo + isto).
+     *
+     * Offset e não posição absoluta pra o alvo base continuar sendo do mundo
+     * (a OrbitCameraBehaviour recebe um no construtor): o pan é o que o USUÁRIO
+     * acrescentou, e zerar isto devolve o enquadramento original.
+     */
+    pan: [number, number, number];
 }
 
 /**
@@ -230,6 +239,10 @@ const raycastInitial: RaycastState = {
     scalpelDebugView: false,
 };
 
+//Mundo por pixel arrastado, POR UNIDADE DE RAIO. Com raio 2.3, arrastar a
+//altura de uma tela de 800px move ~2.4 unidades — a caixa do volume inteira.
+const PAN_SENSITIVITY = 0.0013;
+
 //Pitch máximo (~89°): abaixo do polo, onde o up (0,1,0) do lookAt ficaria
 //paralelo à direção de visão e a orientação degeneraria.
 const MAX_PITCH = (89 * Math.PI) / 180;
@@ -242,6 +255,7 @@ const cameraInitial: CameraState = {
     yaw: 0,
     pitch: (15 * Math.PI) / 180,
     radius: 2.3,
+    pan: [0, 0, 0],
 };
 
 function cameraReducer(state: CameraState = cameraInitial, action: AppAction): CameraState {
@@ -250,6 +264,36 @@ function cameraReducer(state: CameraState = cameraInitial, action: AppAction): C
             const yaw = state.yaw + action.payload.dYaw;
             const pitch = Math.min(Math.max(state.pitch + action.payload.dPitch, -MAX_PITCH), MAX_PITCH);
             return { ...state, yaw, pitch };
+        }
+        case PAN_CAMERA: {
+            //Os eixos da TELA em coordenadas de mundo, derivados do próprio
+            //estado da câmera. offsetDir é a direção alvo→câmera:
+            //
+            //  right = d(posição)/d(yaw) normalizado
+            //  up    = offsetDir × right   (os três formam base ortonormal)
+            const cp = Math.cos(state.pitch);
+            const sp = Math.sin(state.pitch);
+            const cy = Math.cos(state.yaw);
+            const sy = Math.sin(state.yaw);
+            const rightX = cy, rightZ = -sy;
+            const upX = -sp * sy, upY = cp, upZ = -sp * cy;
+            //Proporcional ao RAIO: sem isso o pan seria inútil de perto e
+            //selvagem de longe. Com isso, arrastar 100px move sempre a mesma
+            //fração da tela, em qualquer zoom.
+            const k = PAN_SENSITIVITY * state.radius;
+            //Sinais escolhidos pra "arrastar leva a cena junto": o ALVO anda ao
+            //contrário do ponteiro. dy invertido porque y de tela cresce pra
+            //baixo e o up do mundo cresce pra cima.
+            const dx = -action.payload.dx * k;
+            const dy = action.payload.dy * k;
+            return {
+                ...state,
+                pan: [
+                    state.pan[0] + rightX * dx + upX * dy,
+                    state.pan[1] + upY * dy,
+                    state.pan[2] + rightZ * dx + upZ * dy,
+                ],
+            };
         }
         case ZOOM_CAMERA: {
             const radius = Math.min(Math.max(state.radius * action.payload, MIN_RADIUS), MAX_RADIUS);

@@ -36,6 +36,11 @@ export const SET_DEBUG_VIEW_ACTIVE = "SET_DEBUG_VIEW";
 //clampa pitch; a OrbitCameraBehaviour lê e posiciona o nó da câmera.
 export const ORBIT_CAMERA = "ORBIT_CAMERA";
 export const ZOOM_CAMERA = "ZOOM_CAMERA";
+//PAN: desloca o ALVO da órbita no plano da tela. O payload vem em pixels
+//arrastados, e não em unidades de mundo, pelo mesmo motivo do ORBIT_CAMERA
+//mandar radianos: o reducer é quem conhece o modelo de câmera (yaw/pitch/raio),
+//então é ele que converte. A UI só sabe que o ponteiro andou tanto.
+export const PAN_CAMERA = "PAN_CAMERA";
 
 //Raycaster: o toggle da UI liga/desliga o shading por gradiente; a
 //VolumeRaycastBehaviour lê e repassa pro material. ENABLE e MODE são
@@ -188,6 +193,12 @@ export interface OrbitCameraAction {
     type: typeof ORBIT_CAMERA;
     /** Deltas de órbita em radianos (já convertidos de pixels no React). */
     payload: { dYaw: number; dPitch: number };
+}
+
+export interface PanCameraAction {
+    type: typeof PAN_CAMERA;
+    /** Pixels arrastados na tela. */
+    payload: { dx: number; dy: number };
 }
 
 export interface ZoomCameraAction {
@@ -345,6 +356,10 @@ export function orbitCamera(dYaw: number, dPitch: number): OrbitCameraAction {
     return { type: ORBIT_CAMERA, payload: { dYaw, dPitch } };
 }
 
+export function panCamera(dx: number, dy: number): PanCameraAction {
+    return { type: PAN_CAMERA, payload: { dx, dy } };
+}
+
 export function zoomCamera(factor: number): ZoomCameraAction {
     return { type: ZOOM_CAMERA, payload: factor };
 }
@@ -445,6 +460,7 @@ export type AppAction =
     | SetAlphaScaleAction
     | SetDebugViewActive
     | OrbitCameraAction
+    | PanCameraAction
     | ZoomCameraAction
     | SetRaycastGradientShadingAction
     | SetRaycastGradientModeAction
