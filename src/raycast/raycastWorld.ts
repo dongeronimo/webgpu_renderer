@@ -9,7 +9,7 @@ import { loadGltf } from "../gltfLoader";
 import { loadVolumeTexture } from "../volumeLoader";
 import { dicomTagNumber, sliceSpacingMm } from "../volume-types";
 import { store } from "../redux/store";
-import { setCtfHuRange } from "../redux/actions";
+import { setCtfHuRange, setCtfWindow } from "../redux/actions";
 import { VolumeRaycastMaterial } from "./volumeRaycastMaterial";
 import { VolumeRaycastBehaviour } from "./volumeRaycastBehaviour";
 import { OrbitCameraBehaviour } from "./orbitCameraBehaviour";
@@ -81,6 +81,14 @@ export class RaycastWorld extends World{
         const { texture, metadata } = await loadVolumeTexture(this.device, VOLUME_URL);
         //Faixa de HU do exame → redux, pro editor de CTF usar como eixo X.
         store.dispatch(setCtfHuRange(metadata.huMin, metadata.huMax));
+        //Janela do DICOM: âncora dos presets de MR (ver ctfPresets.ts). Tag
+        //opcional e às vezes multivalor — dicomTagNumber pega o 1º valor e
+        //devolve NaN se faltar; largura <= 0 avisa o preset que não há janela.
+        const windowWidth = dicomTagNumber(metadata.windowWidth, 0);
+        store.dispatch(setCtfWindow(
+            dicomTagNumber(metadata.windowCenter, 0),
+            Number.isFinite(windowWidth) ? windowWidth : 0,
+        ));
         //Gradiente pré-calculado, MESMO compute do mundo CT: uma textura 3D
         //rgba8 gerada uma vez no carregamento (direção nos rgb, magnitude no a).
         //spacing/maxMagnitude saem do metadata do exame pelo helper. A ordem da

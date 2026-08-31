@@ -34,6 +34,7 @@ import { GauntletCharacterSelectPanel } from "./gauntlet/GauntletCharacterSelect
 import RaycastESSToDos from "./raycast_ess/raycastESSToDos";
 import ToolsPanel from "./raycast_lasso/ToolsPanel";
 import { LassoCaptureOverlay } from "./raycast_lasso/LassoCaptureOverlay";
+import { ExamSelectPanel } from "./raycast_lasso/ExamSelectPanel";
 import { ScalpelCaptureOverlay } from "./raycast_lasso/ScalpelCaptureOverlay";
 
 export function TerraPositionTable({ world }: { world: World }) {
@@ -86,6 +87,24 @@ function SolarSystemUIRoot({ world }: { world: World }) {
     );
 }
 
+//UI do mundo do lasso. O volume não vem mais junto com o mundo: até o exame
+//ser escolhido E carregado, os painéis que mexem no volume não existem.
+//
+//Enquanto o modal está de pé isso seria redundante (o backdrop já come todo
+//clique), mas o estado "erro na carga" não tem modal bloqueante nenhum — e sem
+//este gate a barra de ferramentas ficaria clicável sem volume, com o
+//captureClipFromLocal() do mundo estourando no primeiro traço.
+function RaycastLassoUi() {
+    const examReady = useSelector((state: RootState) => state.exam.status === "ready");
+    return (
+        <div>
+            <ExamSelectPanel />
+            {examReady && <RaycastESSRenderProperties />}
+            {examReady && <ToolsPanel />}
+        </div>
+    );
+}
+
 //Qual UI acompanha qual mundo — decidido pela PROP world (instanceof), e
 //NÃO pelo currentWorld do redux, de propósito: o redux carrega intenção e
 //muda no clique, antes do engine trocar; a prop muda no setUiWorld() do
@@ -116,12 +135,7 @@ function WorldUi({ world }: { world: World }) {
     //MESMO state.raycast. O painel próprio do lasso (desenhar/limpar/undo/redo,
     //lista de lassos) nasce na F1, junto do overlay de captura.
     if (world instanceof RaycastLassoWorld) {
-        return (
-            <div>
-                <RaycastESSRenderProperties/>
-                <ToolsPanel/>
-            </div>
-        );
+        return <RaycastLassoUi />;
     }
     if (world instanceof GauntletWorld) {
         return (
@@ -140,6 +154,12 @@ export function App({ world }: { world: World }) {
     //Qual ferramenta está armada — só pra saber se o overlay de captura do
     //lasso entra na frente da camada de órbita (ver o comentário lá embaixo).
     const activeTool = useSelector((state: RootState) => state.tools.activeTool);
+    //No mundo do lasso o volume chega DEPOIS do mundo (o exame é escolhido num
+    //modal), e os overlays de captura chamam world.captureClipFromLocal(), que
+    //precisa do nó do volume. Só é consultado nos ramos do lasso lá embaixo —
+    //os outros mundos carregam o volume no próprio createWorld e não esperam
+    //escolha nenhuma.
+    const volumeReady = useSelector((state: RootState) => state.exam.status === "ready");
     //Sem div posicionado aqui: cada painel é um FloatingPanel que se
     //posiciona sozinho e religa o próprio pointer-events. O WorldSwitch
     //vive FORA do WorldUi porque pertence à app, não a um mundo — ele
@@ -159,9 +179,9 @@ export function App({ world }: { world: World }) {
                depois pinta em cima e leva TODO evento de ponteiro — é esta ordem
                (e não um if no OrbitControls) que congela a câmera enquanto o
                lasso está armado. Antes dos painéis, senão cobriria eles também.*/}
-            {world instanceof RaycastLassoWorld && activeTool === "lasso"
+            {world instanceof RaycastLassoWorld && volumeReady && activeTool === "lasso"
                 && <LassoCaptureOverlay world={world} />}
-            {world instanceof RaycastLassoWorld && activeTool === "scalpel"
+            {world instanceof RaycastLassoWorld && volumeReady && activeTool === "scalpel"
                 && <ScalpelCaptureOverlay world={world} />}
             {/*Editor de CTF: painel próprio, nos mundos que consomem o state ctf
                (CT + os raycasters). A CTF é da modalidade, então o mesmo editor
@@ -169,7 +189,7 @@ export function App({ world }: { world: World }) {
             {(world instanceof TextureStackVolumeRendererCT
                 || world instanceof RaycastWorld
                 || world instanceof RaycastESSWorld
-                || world instanceof RaycastLassoWorld) && <CtfEditorPanel />}
+                || (world instanceof RaycastLassoWorld && volumeReady)) && <CtfEditorPanel />}
             <WorldSwitch />
             {/*Tela de carga: UI base como o WorldSwitch (sobrevive à troca) e
                por cima de tudo (z-index do ModalPanel). Aparece sozinha lendo

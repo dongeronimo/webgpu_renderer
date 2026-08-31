@@ -8,6 +8,7 @@
 import type { CtfPoint } from "../ctf";
 import type { LassoData } from "../raycastLasso/lassoData";
 import type { ScalpelData } from "../raycastLasso/scalpelData";
+import type { VolumeCatalogEntry } from "../volumeCatalog";
 
 export const HELLO_CLICKED = "HELLO_CLICKED";
 //nome == valor: é o VALOR que aparece em logs/devtools, e grep tem que achar
@@ -20,6 +21,23 @@ export const SWITCH_WORLD = "SWITCH_WORLD";
 //+ upload pra GPU) não tem como ser contabilizada em porcentagem.
 export const SET_LOADING = "SET_LOADING";
 
+//SELEÇÃO DE EXAME (mundo do lasso). O volume deixou de ser carregado no
+//createWorld: o mundo nasce só com câmera, o modal lista o que há em
+///volumes/index.json e SÓ DEPOIS da escolha o volume é montado.
+//
+//Por que a escolha não pode ser um await dentro do createWorld: na troca de
+//mundo o main só chama setUiWorld(mundoNovo) DEPOIS do await createWorld
+//(ver main.ts). Bloquear lá dentro deixaria a UI ainda apontada pro mundo
+//anterior — o modal, que o WorldUi escolhe por `world instanceof`, nunca
+//renderizaria, e ninguém baixaria a tela de carga (só o 1º update() faz
+//isso). Deadlock. Daí a carga ser fase 2, disparada por behaviour, no mesmo
+//desenho da escolha de personagem do gauntlet.
+export const EXAM_CHOOSING = "EXAM_CHOOSING";
+export const EXAM_CHOSEN = "EXAM_CHOSEN";
+export const EXAM_LOAD_STARTED = "EXAM_LOAD_STARTED";
+export const EXAM_LOAD_FINISHED = "EXAM_LOAD_FINISHED";
+export const EXAM_LOAD_FAILED = "EXAM_LOAD_FAILED";
+
 export const TEXTURE_BASED_CT_SET_NUM_SLICES = "TEXTURE_BASED_CT_SET_NUM_SLICES";
 
 export const CTF_SET_POINTS = "CTF_SET_POINTS";
@@ -27,6 +45,15 @@ export const CTF_SET_POINTS = "CTF_SET_POINTS";
 //mundo despacha na carga; a UI lê pro domínio do gráfico. É metadata de carga
 //(baixa frequência), não estado por-frame, então cabe no redux.
 export const SET_CTF_HU_RANGE = "SET_CTF_HU_RANGE";
+
+//Janela de exibição do exame (WindowCenter/WindowWidth do DICOM), despachada
+//na carga junto com a faixa de valores. É a ÂNCORA dos presets de MR: em MR os
+//valores são unidades arbitrárias do aparelho, então preset em valor absoluto
+//não transfere de exame pra exame — mas a janela é a calibração que o próprio
+//aparelho gravou pro tecido daquela série. Num TOF de crânio, medido: a borda
+//de baixo da janela cai no corte do fundo e a de cima no exato ponto onde o
+//parênquima acaba e começa o vaso.
+export const SET_CTF_WINDOW = "SET_CTF_WINDOW";
 
 export const SET_ALPHA_SCALE = "SET_ALPHA_SCALE";
 
@@ -307,11 +334,74 @@ export interface GauntletSetCharacterScreenAction {
     payload: boolean;
 }
 
+export interface SetCtfWindowAction {
+    type: typeof SET_CTF_WINDOW;
+    /** Em unidades do exame. width <= 0 = o DICOM não trazia a tag. */
+    payload: { center: number; width: number };
+}
+
+export interface ExamChoosingAction {
+    type: typeof EXAM_CHOOSING;
+    payload: boolean;
+}
+
+export interface ExamChosenAction {
+    type: typeof EXAM_CHOSEN;
+    /** A entrada inteira do catálogo: o `path` vira baseUrl da carga e o
+     *  `name` fica no state pra UI dizer qual exame está aberto. */
+    payload: VolumeCatalogEntry;
+}
+
+export interface ExamLoadStartedAction {
+    type: typeof EXAM_LOAD_STARTED;
+}
+
+export interface ExamLoadFinishedAction {
+    type: typeof EXAM_LOAD_FINISHED;
+}
+
+export interface ExamLoadFailedAction {
+    type: typeof EXAM_LOAD_FAILED;
+    /** Mensagem mostrada no próprio modal, que reabre pra nova escolha. */
+    payload: string;
+}
+
 export interface GauntletCharacterChosenAction {
     type: typeof GAUNTLET_CHARACTER_CHOSEN;
     /** "Dmitry" ou "Nat" — mesma string usada como nome do prefab (ver
      *  gauntletWorld.ts) e mandada pro server em JoinRequest.character. */
     payload: { character: string };
+}
+
+/** A janela de exibição do exame (WindowCenter/WindowWidth). Passe width <= 0
+ *  quando a tag não existir — os presets caem pro fallback (faixa inteira). */
+export function setCtfWindow(center: number, width: number): SetCtfWindowAction {
+    return { type: SET_CTF_WINDOW, payload: { center, width } };
+}
+
+/** Abre o modal de seleção de exame. Quem chama é a behaviour do mundo, não
+ *  a UI: quem sabe que não há exame carregado é o mundo. */
+export function examShowSelection(): ExamChoosingAction {
+    return { type: EXAM_CHOOSING, payload: true };
+}
+
+/** O usuário escolheu — fecha o modal e arma a fase 2. Os cortes (lassos e
+ *  bisturis) são zerados pelo reducer: eles são recortes DAQUELE volume, as
+ *  matrizes não valem noutro exame. */
+export function examChosen(entry: VolumeCatalogEntry): ExamChosenAction {
+    return { type: EXAM_CHOSEN, payload: entry };
+}
+
+export function examLoadStarted(): ExamLoadStartedAction {
+    return { type: EXAM_LOAD_STARTED };
+}
+
+export function examLoadFinished(): ExamLoadFinishedAction {
+    return { type: EXAM_LOAD_FINISHED };
+}
+
+export function examLoadFailed(message: string): ExamLoadFailedAction {
+    return { type: EXAM_LOAD_FAILED, payload: message };
 }
 
 export function helloClicked(): HelloClickedAction {
@@ -481,4 +571,10 @@ export type AppAction =
     | GauntletLoginSucceededAction
     | SetGauntletShadowMapSizeAction
     | GauntletSetCharacterScreenAction
-    | GauntletCharacterChosenAction;
+    | GauntletCharacterChosenAction
+    | ExamChoosingAction
+    | ExamChosenAction
+    | ExamLoadStartedAction
+    | ExamLoadFinishedAction
+    | ExamLoadFailedAction
+    | SetCtfWindowAction;

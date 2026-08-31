@@ -1,3 +1,8 @@
 node_modules/
 dist/
 .claude/
+
+# Os exames convertidos. Moram FORA do repo (D:\dev\exames) e public/volumes e
+# uma junction pra la - ver deploy/README.md. Sao centenas de MB por exame,
+# imutaveis, e quem os distribui e o S3 (deploy.py volumes), nao o git.
+public/volumes/

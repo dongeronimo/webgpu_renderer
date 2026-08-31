@@ -9,7 +9,7 @@ import { loadGltf } from "../gltfLoader";
 import { loadVolumeTexture } from "../volumeLoader";
 import { dicomTagNumber, sliceSpacingMm } from "../volume-types";
 import { store } from "../redux/store";
-import { setCtfHuRange } from "../redux/actions";
+import { setCtfHuRange, setCtfWindow } from "../redux/actions";
 import { VolumeRaycastESSMaterial } from "./volumeRaycastESSMaterial";
 import { VolumeRaycastESSBehaviour } from "./volumeRaycastESSBehaviour";
 import { OrbitCameraBehaviour } from "../raycast/orbitCameraBehaviour";
@@ -93,6 +93,14 @@ export class RaycastESSWorld extends World {
         const { texture, metadata } = await loadVolumeTexture(this.device, VOLUME_URL);
         //Faixa de HU do exame → redux, pro editor de CTF usar como eixo X.
         store.dispatch(setCtfHuRange(metadata.huMin, metadata.huMax));
+        //Janela do DICOM: âncora dos presets de MR (ver ctfPresets.ts). Tag
+        //opcional e às vezes multivalor — dicomTagNumber pega o 1º valor e
+        //devolve NaN se faltar; largura <= 0 avisa o preset que não há janela.
+        const windowWidth = dicomTagNumber(metadata.windowWidth, 0);
+        store.dispatch(setCtfWindow(
+            dicomTagNumber(metadata.windowCenter, 0),
+            Number.isFinite(windowWidth) ? windowWidth : 0,
+        ));
         //Gradiente pré-calculado (mesmo compute do mundo CT).
         const gradientParams = gradientParamsFromMetadata(metadata);
         this.gradientTexture = createGradientTexture(this.device, texture, gradientParams);

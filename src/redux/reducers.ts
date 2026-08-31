@@ -6,7 +6,9 @@ import type { CtfPoint } from "../ctf";
 import type { LassoData } from "../raycastLasso/lassoData";
 import type { ScalpelData } from "../raycastLasso/scalpelData";
 import { defaultWorld } from "../appConfig";
-import { CTF_SET_POINTS, GAUNTLET_CHARACTER_CHOSEN, HISTORY_REDO, HISTORY_UNDO, SET_RAYCAST_AUTO_FRAMEBUFFER, LASSO_ADDED, LASSO_REMOVED, SCALPEL_ADDED, SCALPEL_REMOVED, SET_LASSO_DEBUG_VIEW, SET_SCALPEL_DEBUG_VIEW, SET_SCALPEL_MARGIN, GAUNTLET_CHOOSING_CHARACTER, GAUNTLET_LOGIN_SUCCEEDED, HELLO_CLICKED, ORBIT_CAMERA, PAN_CAMERA, SET_ACTIVE_TOOL, SET_ALPHA_SCALE, SET_CTF_HU_RANGE, SET_DEBUG_VIEW_ACTIVE, SET_GAUNTLET_SHADOW_MAP_SIZE, SET_LOADING, SET_RAYCAST_ESS, SET_RAYCAST_ESS_DEBUG, SET_RAYCAST_FRAMEBUFFER_SCALE, SET_RAYCAST_GRADIENT_MODE, SET_RAYCAST_GRADIENT_SHADING, SWITCH_WORLD, TEXTURE_BASED_CT_SET_NUM_SLICES, ZOOM_CAMERA, type AppAction, type GradientMode, type ToolName, type WorldName } from "./actions";
+import type { VolumeCatalogEntry } from "../volumeCatalog";
+import { CTF_SET_POINTS, SET_CTF_WINDOW, EXAM_CHOOSING, EXAM_CHOSEN, EXAM_LOAD_FAILED, EXAM_LOAD_FINISHED,
+    EXAM_LOAD_STARTED, GAUNTLET_CHARACTER_CHOSEN, HISTORY_REDO, HISTORY_UNDO, SET_RAYCAST_AUTO_FRAMEBUFFER, LASSO_ADDED, LASSO_REMOVED, SCALPEL_ADDED, SCALPEL_REMOVED, SET_LASSO_DEBUG_VIEW, SET_SCALPEL_DEBUG_VIEW, SET_SCALPEL_MARGIN, GAUNTLET_CHOOSING_CHARACTER, GAUNTLET_LOGIN_SUCCEEDED, HELLO_CLICKED, ORBIT_CAMERA, PAN_CAMERA, SET_ACTIVE_TOOL, SET_ALPHA_SCALE, SET_CTF_HU_RANGE, SET_DEBUG_VIEW_ACTIVE, SET_GAUNTLET_SHADOW_MAP_SIZE, SET_LOADING, SET_RAYCAST_ESS, SET_RAYCAST_ESS_DEBUG, SET_RAYCAST_FRAMEBUFFER_SCALE, SET_RAYCAST_GRADIENT_MODE, SET_RAYCAST_GRADIENT_SHADING, SWITCH_WORLD, TEXTURE_BASED_CT_SET_NUM_SLICES, ZOOM_CAMERA, type AppAction, type GradientMode, type ToolName, type WorldName } from "./actions";
 
 export interface HelloState {
     /** Quantas vezes o botão de hello foi clicado. */
@@ -48,6 +50,14 @@ export interface CtfState {
     //mundo despacha na carga; até lá vale o placeholder inicial.
     huMin: number;
     huMax: number;
+    /**
+     * Janela de exibição do exame (WindowCenter/WindowWidth do DICOM), em
+     * unidades do próprio exame. NÃO afeta o render — serve de âncora pros
+     * presets de MR, onde valor absoluto não quer dizer nada entre exames
+     * (ver ctfPresets.ts). windowWidth <= 0 = o exame não trazia a tag.
+     */
+    windowCenter: number;
+    windowWidth: number;
 }
 
 /**
@@ -171,6 +181,36 @@ export interface GauntletState {
     shadowMapSize: number;
 }
 
+/**
+ * Seleção de exame do mundo do lasso.
+ *
+ * O mundo não nasce mais com um volume hardcodado: nasce vazio, este state
+ * diz em que ponto do rito de entrada ele está, e a carga do volume é uma
+ * FASE 2 disparada pela ExamSelectionBehaviour (ver raycastLassoWorld.ts).
+ *
+ * `selected` SOBREVIVE à troca de mundo, de propósito e pelo mesmo motivo dos
+ * lassos: sair do mundo e voltar tem que reencontrar o exame aberto, sem
+ * perguntar de novo. Já `status` é do mundo VIVO — quem o rearma é a carga,
+ * porque o mundo novo nasce sem volume mesmo com `selected` preenchido.
+ */
+export interface ExamState {
+    /** Modal aberto. */
+    choosing: boolean;
+    /** Exame aberto (ou escolhido, ainda carregando); null = nenhum. */
+    selected: VolumeCatalogEntry | null;
+    /** Fase 2: "idle" antes de escolher, "ready" com o volume montado. */
+    status: "idle" | "loading" | "ready" | "error";
+    /** Mensagem de falha, mostrada no modal quando status === "error". */
+    error: string | null;
+}
+
+const examInitial: ExamState = {
+    choosing: false,
+    selected: null,
+    status: "idle",
+    error: null,
+};
+
 const helloInitial: HelloState = {
     clickCount: 0,
 };
@@ -222,6 +262,9 @@ const ctfInitial: CtfState = {
     //placeholder até um mundo despachar a faixa real do exame (metadata)
     huMin: -1000,
     huMax: 1500,
+    //0 = sem janela conhecida ainda; os presets de MR caem pro fallback
+    windowCenter: 0,
+    windowWidth: 0,
 };
 
 //Gradiente começa desligado; quando ligar, o default é on-the-fly (não custa
@@ -397,6 +440,8 @@ function ctfReducer(state: CtfState = ctfInitial, action: AppAction): CtfState {
             return { ...state, points: [...action.payload].sort((a, b) => a.hu - b.hu) };
         case SET_CTF_HU_RANGE:
             return { ...state, huMin: action.payload.min, huMax: action.payload.max };
+        case SET_CTF_WINDOW:
+            return { ...state, windowCenter: action.payload.center, windowWidth: action.payload.width };
         default:
             return state;
     }
@@ -430,6 +475,28 @@ const scalpelInitial: ScalpelState = { items: [], margin: 0 };
 //Array NOVO a cada mudança (nunca push in-place): é a troca de referência que
 //a behaviour do material vai detectar pra reenviar os lassos pra GPU, o mesmo
 //contrato do ctfReducer.
+function examReducer(state: ExamState = examInitial, action: AppAction): ExamState {
+    switch (action.type) {
+        case EXAM_CHOOSING:
+            return { ...state, choosing: action.payload };
+        case EXAM_CHOSEN:
+            //status volta pra "idle": é ele que a behaviour do mundo lê pra
+            //saber que há uma carga a disparar.
+            return { choosing: false, selected: action.payload, status: "idle", error: null };
+        case EXAM_LOAD_STARTED:
+            return { ...state, status: "loading", error: null };
+        case EXAM_LOAD_FINISHED:
+            return { ...state, status: "ready", error: null };
+        case EXAM_LOAD_FAILED:
+            //Solta o `selected` junto: sem isso, reescolher O MESMO exame que
+            //acabou de falhar não mudaria nada no state e a nova tentativa
+            //passaria batida. Modal reabre já com o erro na tela.
+            return { choosing: true, selected: null, status: "error", error: action.payload };
+        default:
+            return state;
+    }
+}
+
 function lassoReducer(state: LassoState = lassoInitial, action: AppAction): LassoState {
     switch (action.type) {
         case LASSO_ADDED:
@@ -439,6 +506,13 @@ function lassoReducer(state: LassoState = lassoInitial, action: AppAction): Lass
         //SEM reset no SWITCH_WORLD, ao contrário do tools: sair do mundo e
         //voltar não pode jogar fora o recorte que o usuário fez — as matrizes
         //continuam válidas (o model do volume é remontado idêntico).
+        //
+        //TROCAR DE EXAME é o oposto: cada LassoData carrega a clipFromLocal do
+        //volume em que foi desenhado, e num exame com outras proporções (ou
+        //outra anatomia) aquele recorte não quer dizer nada — ficaria cortando
+        //uma região arbitrária. Zera.
+        case EXAM_CHOSEN:
+            return lassoInitial;
         default:
             return state;
     }
@@ -453,6 +527,11 @@ function scalpelReducer(state: ScalpelState = scalpelInitial, action: AppAction)
         case SET_SCALPEL_MARGIN:
             return { ...state, margin: action.payload };
         //Sem reset no SWITCH_WORLD, igual ao lasso: é o trabalho do usuário.
+        //Mas troca de exame zera, também igual ao lasso — os cortes são
+        //daquele volume. A margem sobrevive: é ajuste de ferramenta, não
+        //documento.
+        case EXAM_CHOSEN:
+            return { ...scalpelInitial, margin: state.margin };
         default:
             return state;
     }
@@ -478,6 +557,7 @@ const combinedReducer = combineReducers({
     lasso: lassoReducer,
     scalpel: scalpelReducer,
     gauntlet: gauntletReducer,
+    exam: examReducer,
     history: historyReducer,
 });
 
@@ -522,6 +602,14 @@ export function rootReducer(state: RootState | undefined, action: AppAction): Ro
         };
     }
     const applied = combinedReducer(state, action);
+    //Trocar de exame zera as pilhas junto com os cortes. As ações guardadas ali
+    //são LASSO_ADDED/SCALPEL_ADDED do exame ANTERIOR, carregando a
+    //clipFromLocal daquele volume: um undo depois da troca recriaria um recorte
+    //sem sentido no exame novo. E não é uma edição desfazível — escolher exame
+    //não entra na pilha, limpa ela.
+    if (action.type === EXAM_CHOSEN) {
+        return { ...applied, history: historyInitial };
+    }
     const inverse = invertAction(action);
     if (inverse === null) {
         //Ação não-desfazível (CTF, câmera, toggles...): não empilha NEM limpa o

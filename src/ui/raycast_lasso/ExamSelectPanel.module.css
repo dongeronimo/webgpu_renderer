@@ -1,0 +1,62 @@
+/* Lista vertical e não grade de cards (como a escolha de personagem): os
+   rótulos são frases longas vindas das tags DICOM ("ANGIO-RM VENOSA CRANIO —
+   ARTERIAL TOF SJ"), que numa coluna de 150px quebrariam em 4 linhas. A lista
+   rola dentro do .content do ModalPanel, que já é overflow:auto. */
+.list {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    min-width: 380px;
+}
+
+/* Linha clicável inteira. Mesma paleta do card do character select. */
+.item {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 3px;
+    padding: 8px 12px;
+    background: rgba(255, 255, 255, 0.06);
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    border-radius: 6px;
+    color: #ddd;
+    font-family: inherit;
+    text-align: left;
+    cursor: pointer;
+    transition: background-color 80ms ease, border-color 80ms ease;
+}
+
+.item:hover:not(:disabled) {
+    background: rgba(255, 255, 255, 0.12);
+    border-color: rgba(255, 255, 255, 0.35);
+}
+
+.item:active:not(:disabled) {
+    background: rgba(255, 255, 255, 0.05);
+}
+
+.name {
+    font-size: 13px;
+    font-weight: 600;
+}
+
+/* O path serve de desempate quando duas séries têm a mesma descrição — que
+   acontece de verdade (o mesmo exame trazia duas "ARTERIAL TOF SJ"). */
+.path {
+    font-size: 11px;
+    opacity: 0.6;
+}
+
+.message {
+    padding: 4px 0;
+    opacity: 0.75;
+}
+
+.error {
+    margin-bottom: 8px;
+    padding: 8px 10px;
+    border: 1px solid rgba(255, 107, 107, 0.5);
+    border-radius: 6px;
+    background: rgba(255, 107, 107, 0.1);
+    color: #ff6b6b;
+}
