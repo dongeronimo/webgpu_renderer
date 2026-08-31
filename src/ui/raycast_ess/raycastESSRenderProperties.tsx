@@ -3,7 +3,7 @@
 //a behaviour-cérebro (VolumeRaycastBehaviour) vai ler no update() — nesta
 //etapa ninguém consome ainda, é só UI + plumbing do redux.
 import { useDispatch, useSelector } from "react-redux";
-import { setAlphaScale, SetDebugViewActive, setRaycastEssDebugView, setRaycastFramebufferScale, setRaycastGradientMode, setRaycastGradientShading, type GradientMode } from "../../redux/actions";
+import { setAlphaScale, SetDebugViewActive, setRaycastAutoFramebuffer, setRaycastEssDebugView, setRaycastFramebufferScale, setRaycastGradientMode, setRaycastGradientShading, type GradientMode } from "../../redux/actions";
 import type { RootState } from "../../redux/reducers";
 import type { AppDispatch } from "../../redux/store";
 import { FloatingPanel } from "../generic/FloatingPanel";
@@ -31,6 +31,7 @@ export default function RaycastESSRenderProperties() {
     const gradientEnabled = useSelector((state: RootState) => state.raycast.gradientEnabled);
     const gradientMode = useSelector((state: RootState) => state.raycast.gradientMode);
     const scaleFactor = useSelector((state:RootState) => state.raycast.framebufferScale);
+    const autoScale = useSelector((state: RootState) => state.raycast.autoFramebufferScale);
     const alphaScale = useSelector((state: RootState) => state.textureBasedCT.alphaScale);
     const debugView = useSelector((state: RootState) => state.raycast.essDebugView);
     return (
@@ -72,8 +73,20 @@ export default function RaycastESSRenderProperties() {
                 max={1}
                 value={scaleFactor}
                 step={0.05}
+                //Com o automático ligado o slider vira MOSTRADOR: ele anda
+                //sozinho e mexer nele seria disputa (o automático corrigiria no
+                //frame seguinte). Desabilitado é honesto; escondido esconderia
+                //justamente o que se quer ver acontecendo.
+                disabled={autoScale}
                 onChange={(value) => dispatch(setRaycastFramebufferScale(value))}
                 />
+            <label style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                <span>ajuste dinâmico</span>
+                <Toggle
+                    checked={autoScale}
+                    onChange={(value) => dispatch(setRaycastAutoFramebuffer(value))}
+                />
+            </label>
             <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 4 }}>
                     <span>Alpha Scale</span>
                     <span>{alphaScale}</span>

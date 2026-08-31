@@ -6,7 +6,7 @@ import type { CtfPoint } from "../ctf";
 import type { LassoData } from "../raycastLasso/lassoData";
 import type { ScalpelData } from "../raycastLasso/scalpelData";
 import { defaultWorld } from "../appConfig";
-import { CTF_SET_POINTS, GAUNTLET_CHARACTER_CHOSEN, HISTORY_REDO, HISTORY_UNDO, LASSO_ADDED, LASSO_REMOVED, SCALPEL_ADDED, SCALPEL_REMOVED, SET_LASSO_DEBUG_VIEW, SET_SCALPEL_DEBUG_VIEW, SET_SCALPEL_MARGIN, GAUNTLET_CHOOSING_CHARACTER, GAUNTLET_LOGIN_SUCCEEDED, HELLO_CLICKED, ORBIT_CAMERA, SET_ACTIVE_TOOL, SET_ALPHA_SCALE, SET_CTF_HU_RANGE, SET_DEBUG_VIEW_ACTIVE, SET_GAUNTLET_SHADOW_MAP_SIZE, SET_LOADING, SET_RAYCAST_ESS, SET_RAYCAST_ESS_DEBUG, SET_RAYCAST_FRAMEBUFFER_SCALE, SET_RAYCAST_GRADIENT_MODE, SET_RAYCAST_GRADIENT_SHADING, SWITCH_WORLD, TEXTURE_BASED_CT_SET_NUM_SLICES, ZOOM_CAMERA, type AppAction, type GradientMode, type ToolName, type WorldName } from "./actions";
+import { CTF_SET_POINTS, GAUNTLET_CHARACTER_CHOSEN, HISTORY_REDO, HISTORY_UNDO, SET_RAYCAST_AUTO_FRAMEBUFFER, LASSO_ADDED, LASSO_REMOVED, SCALPEL_ADDED, SCALPEL_REMOVED, SET_LASSO_DEBUG_VIEW, SET_SCALPEL_DEBUG_VIEW, SET_SCALPEL_MARGIN, GAUNTLET_CHOOSING_CHARACTER, GAUNTLET_LOGIN_SUCCEEDED, HELLO_CLICKED, ORBIT_CAMERA, SET_ACTIVE_TOOL, SET_ALPHA_SCALE, SET_CTF_HU_RANGE, SET_DEBUG_VIEW_ACTIVE, SET_GAUNTLET_SHADOW_MAP_SIZE, SET_LOADING, SET_RAYCAST_ESS, SET_RAYCAST_ESS_DEBUG, SET_RAYCAST_FRAMEBUFFER_SCALE, SET_RAYCAST_GRADIENT_MODE, SET_RAYCAST_GRADIENT_SHADING, SWITCH_WORLD, TEXTURE_BASED_CT_SET_NUM_SLICES, ZOOM_CAMERA, type AppAction, type GradientMode, type ToolName, type WorldName } from "./actions";
 
 export interface HelloState {
     /** Quantas vezes o botão de hello foi clicado. */
@@ -62,6 +62,10 @@ export interface RaycastState {
     gradientEnabled: boolean;
     gradientMode: GradientMode;
     framebufferScale: number;
+    //O framebufferScale acima é ajustado sozinho quando isto está ligado (ver
+    //FramebufferAutoScaleBehaviour). Off por default: mexer na resolução sem
+    //ninguém pedir é surpresa, e A/B de performance precisa de escala fixa.
+    autoFramebufferScale: boolean;
     //Empty-space skipping ligado? (mundo raycastESS; on por default pra o world
     //já nascer usando o skip — o toggle serve pra comparar com/sem.)
     essEnabled: boolean;
@@ -217,6 +221,7 @@ const raycastInitial: RaycastState = {
     gradientEnabled: false,
     gradientMode: "on-the-fly",
     framebufferScale : 1.0,
+    autoFramebufferScale: false,
     essEnabled: true,
     essDebugView: true,
     //off por default: com lasso nenhum desenhado ele não faria nada mesmo, e
@@ -318,7 +323,14 @@ function raycastReducer(state: RaycastState = raycastInitial, action: AppAction)
         case SET_RAYCAST_GRADIENT_MODE:
             return { ...state, gradientMode: action.payload };
         case SET_RAYCAST_FRAMEBUFFER_SCALE:
-            return { ...state, framebufferScale: action.payload };
+            //Guarda o MESMO objeto quando o valor não mudou: o automático
+            //despacha em cima do valor atual quando já está no limite, e state
+            //novo à toa acordaria o skipFrame do mundo do lasso todo frame.
+            return state.framebufferScale === action.payload
+                ? state
+                : { ...state, framebufferScale: action.payload };
+        case SET_RAYCAST_AUTO_FRAMEBUFFER:
+            return { ...state, autoFramebufferScale: action.payload };
         case SET_RAYCAST_ESS:
             return { ...state, essEnabled: action.payload };
         case SET_RAYCAST_ESS_DEBUG:

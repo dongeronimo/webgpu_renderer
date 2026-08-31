@@ -71,7 +71,7 @@ const TOOLS: readonly ToolRadioItem<ToolName>[] = [
         value: "lasso",
         label: "Lasso",
         icon: <LassoIcon />,
-        hint: "Remove tudo que está sob o contorno, de ponta a ponta",
+        hint: "Remove tudo sob o contorno, de ponta a ponta (Alt: mantém só o de dentro)",
     },
     {
         value: "scalpel",
@@ -215,6 +215,7 @@ export default function ToolsPanel() {
                 <p style={HINT_STYLE}>
                     arraste com o botão esquerdo pra desenhar<br />
                     botão direito cancela o traço · Esc solta a ferramenta
+                    {activeTool === "lasso" && <><br />Alt: mantém em vez de remover</>}
                 </p>
             )}
 

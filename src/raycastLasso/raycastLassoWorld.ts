@@ -9,13 +9,16 @@ import { loadGltf } from "../gltfLoader";
 import { loadVolumeTexture } from "../volumeLoader";
 import { dicomTagNumber } from "../volume-types";
 import { store } from "../redux/store";
+import type { RootState } from "../redux/reducers";
 import { setCtfHuRange } from "../redux/actions";
 import { VolumeRaycastLassoMaterial } from "./volumeRaycastLassoMaterial";
 import { VolumeRaycastLassoBehaviour } from "./volumeRaycastLassoBehaviour";
 import { OrbitCameraBehaviour } from "../raycast/orbitCameraBehaviour";
+import { FramebufferAutoScaleBehaviour } from "../raycast/framebufferAutoScaleBehaviour";
 import { createGradientTexture, gradientParamsFromMetadata } from "../textureStackVolumeRenderCT/gradientCompute";
 import { Behaviour } from "../behaviour";
-import { loadChunkOccupancy, ctfVisibleMask, computeSkipMap } from "../raycastESS/chunkOccupancy";
+import { loadChunkOccupancy } from "../raycastESS/chunkOccupancy";
+import { LassoSatCache, skipMapWithLassos } from "./lassoChunkCull";
 import { DebugChunksPass } from "../raycastESS/debugChunksPass";
 import { DebugChunksOverlayPass } from "../raycastESS/debugChunksOverlayPass";
 
@@ -81,6 +84,9 @@ export class RaycastLassoWorld extends World {
     private volumeNode!: Node;
     private numChunks!: [number, number, number];
     private chunkCell!: [number, number, number];
+    //O state do último frame que foi DESENHADO. Comparado por referência: o
+    //redux só cria objeto novo quando alguma action passou. Ver skipFrame().
+    private lastDrawnState: RootState | null = null;
 
     createRenderPasses(canvas: HTMLCanvasElement, canvasFormat: GPUTextureFormat): void {
         this.canvas = canvas;
@@ -138,12 +144,27 @@ export class RaycastLassoWorld extends World {
             store.getState().raycast.gradientMode === "on-the-fly" ? 1 : 0,
             store.getState().raycast.essEnabled,
         );
-        //skip-map INICIAL: o world calcula a partir da CTF corrente (a behaviour
-        //só recalcula em MUDANÇAS, então o 1º frame já precisa estar certo).
-        const initialMask = ctfVisibleMask(
-            initialCtf, metadata.histogramBins, metadata.histogramMin, metadata.histogramMax,
-        );
-        this.material.setSkipMap(computeSkipMap(occupancy, initialMask));
+        //Grade de chunks no espaço local, usada pelo skip-map e pelo PiP de
+        //debug. Calculada antes do skip-map inicial porque ele já precisa dela.
+        this.numChunks = [metadata.numChunksX, metadata.numChunksY, metadata.numChunksZ];
+        this.chunkCell = [
+            metadata.chunkSize / metadata.width,
+            metadata.chunkSize / metadata.height,
+            metadata.chunkSize / metadata.numSlices,
+        ];
+        //skip-map INICIAL: o world calcula a partir da CTF corrente E dos lassos
+        //que sobreviveram à troca de mundo (a behaviour só recalcula em
+        //MUDANÇAS, então o 1º frame já precisa estar certo).
+        this.material.setSkipMap(skipMapWithLassos(
+            occupancy,
+            initialCtf,
+            metadata.histogramBins,
+            metadata.histogramMin,
+            metadata.histogramMax,
+            store.getState().lasso.items,
+            { numChunks: this.numChunks, chunkCell: this.chunkCell },
+            new LassoSatCache(),
+        ));
         //Lassos INICIAIS: a lista sobrevive à troca de mundo (é o documento do
         //usuário, não o modo de interação), então sair daqui e voltar tem que
         //reencontrar os recortes. A behaviour só reage a MUDANÇAS — o estado
@@ -166,12 +187,6 @@ export class RaycastLassoWorld extends World {
         //refs pro debug pass: model matrix + mesh do cubo saem daqui; a grade e o
         //tamanho do chunk em uvw (chunkSize/dims por eixo) do metadata.
         this.volumeNode = volumeNode;
-        this.numChunks = [metadata.numChunksX, metadata.numChunksY, metadata.numChunksZ];
-        this.chunkCell = [
-            metadata.chunkSize / metadata.width,
-            metadata.chunkSize / metadata.height,
-            metadata.chunkSize / metadata.numSlices,
-        ];
 
         //Proporções físicas do exame (voxel de CT é anisotrópico), normalizadas
         //pro maior eixo = 1 — mesmo cálculo do baseline.
@@ -194,11 +209,15 @@ export class RaycastLassoWorld extends World {
             metadata.histogramBins,
             metadata.histogramMin,
             metadata.histogramMax,
+            { numChunks: this.numChunks, chunkCell: this.chunkCell },
         );
         brain.node = volumeNode;
         volumeNode.behaviours.push(brain);
 
         this.root.addBehaviour(new FramebufferResizerBehaviour());
+        //Quem MEXE na escala quando o fps cai; a de cima é quem a APLICA. As
+        //duas conversam pelo redux, não entre si.
+        this.root.addBehaviour(new FramebufferAutoScaleBehaviour());
     }
 
     /**
@@ -222,6 +241,40 @@ export class RaycastLassoWorld extends World {
         const view = mat4.invert(this.camera.worldMatrix);
         const proj = this.camera.camera!.getProjectionMatrix();
         return mat4.multiply(mat4.multiply(proj, view), this.volumeNode.worldMatrix);
+    }
+
+    /**
+     * Congela o frame enquanto uma ferramenta de corte está armada E o redux
+     * não mexeu desde o último frame desenhado.
+     *
+     * Por que isso é seguro, e não um atalho: com uma ferramenta na mão, o
+     * overlay de captura cobre a camada de órbita e come todos os eventos de
+     * ponteiro — a câmera NÃO PODE se mover. Nenhuma behaviour deste mundo
+     * anima nada por conta própria; tudo que muda a imagem chega por dispatch.
+     * E o redux devolve o MESMO objeto de state quando nada foi despachado.
+     * Então "state igual + ferramenta armada" é prova de que o frame sairia
+     * pixel por pixel idêntico ao anterior.
+     *
+     * O ganho é no traço: desenhar sobre um volume que custa 60ms de GPU por
+     * frame trava o canvas 2D do overlay. Sem o raymarch competindo, o traço
+     * fica no ritmo do ponteiro.
+     *
+     * Fechar um corte é um dispatch, então o frame seguinte roda e o resultado
+     * aparece na hora — não é preciso soltar a ferramenta pra ver o que cortou.
+     */
+    override skipFrame(): boolean {
+        const state = store.getState();
+        if (state.tools.activeTool === "none") {
+            this.lastDrawnState = null;
+            return false;
+        }
+        if (state === this.lastDrawnState) {
+            return true;
+        }
+        //Mudou (ou é o primeiro frame com a ferramenta armada): desenha este e
+        //congela a partir do próximo.
+        this.lastDrawnState = state;
+        return false;
     }
 
     resizeFramebuffer(factor: number) {

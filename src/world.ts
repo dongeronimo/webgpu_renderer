@@ -117,6 +117,24 @@ export abstract class World  {
      */
     abstract render(encoder:GPUCommandEncoder):void;
     /**
+     * "Pula este frame inteiro?" — o main pergunta ANTES de update+render.
+     *
+     * Existe pra um mundo poder dizer "a imagem não pode ter mudado desde o
+     * frame anterior", e aí não há o que redesenhar: o canvas continua exibindo
+     * o último frame apresentado, de graça. É o oposto de um cache — não se
+     * guarda nada, só não se refaz trabalho cujo resultado seria idêntico.
+     *
+     * A base nunca pula: um mundo com animação (o solar, o gauntlet) muda
+     * sozinho todo frame. Quem sabe que a cena está parada é o mundo.
+     *
+     * CUIDADO ao sobrescrever: enquanto pula, o mundo não roda behaviour
+     * nenhuma e não trata resize do canvas. Só devolva true quando puder
+     * garantir que nada visível mudou.
+     */
+    public skipFrame():boolean {
+        return false;
+    }
+    /**
      * Libera os recursos de GPU do mundo (meshes, materiais, passes) e
      * solta o canvas. A base cuida dos materiais registrados (o registry é
      * global — o próximo mundo não pode herdá-lo); cada mundo sobrescreve

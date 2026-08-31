@@ -188,6 +188,18 @@ class GpuTimer {
             });
     }
 
+    /**
+     * O fps suavizado, sem alocar nada.
+     *
+     * Existe separado do snapshot() porque quem lê isto todo frame é engine
+     * (o ajuste dinâmico de resolução), não UI: montar o objeto do snapshot —
+     * com o map dos passes — 60 vezes por segundo pra ler um número seria
+     * lixo puro pro GC.
+     */
+    get fps(): number {
+        return this.fpsEma;
+    }
+
     /** Snapshot pra UI — sempre um objeto novo (contrato do usePolled). */
     snapshot(): GpuStatsSnapshot {
         return {

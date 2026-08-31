@@ -81,6 +81,9 @@ struct Params {
     //---
     scalpelCount: f32, //quantos bisturis vigentes (offset 64)
     scalpelDebug: f32, //>0.5 PINTA a casca do bisturi em vez de cortar (offset 68)
+    //Quantos dos lassos são do tipo MANTER. Vem pronto da CPU pra o shader não
+    //precisar contá-los todo passo só pra saber se entrou em todos.
+    lassoKeepCount: f32, //offset 72
 };
 @group(2) @binding(0) var<uniform> params: Params;
 @group(2) @binding(1) var samp: sampler;
@@ -93,7 +96,12 @@ struct Params {
 @group(2) @binding(6) var lassoMasks: texture_2d_array<f32>;
 //A câmera congelada de cada lasso, na MESMA ordem das camadas: leva pLocal
 //direto pro clip daquele lasso (proj·view·model, composta na CPU).
-@group(2) @binding(7) var<storage, read> lassoClip: array<mat4x4f>;
+struct Lasso {
+    clipFromLocal: mat4x4f,
+    //>0.5 = MANTER só o que está dentro; senão, remover o que está dentro.
+    keep: f32,
+};
+@group(2) @binding(7) var<storage, read> lassos: array<Lasso>;
 
 //---- BISTURI: recursos PRÓPRIOS, deliberadamente separados dos do lasso -----
 //As duas ferramentas se parecem (contorno + câmera congelada) mas produzem
@@ -128,30 +136,48 @@ const SKIP_EPS: f32 = 1e-4;
 //tecido e branco de osso nunca vão ser confundidos com ela.
 const LASSO_DEBUG_TINT = vec3f(1.0, 0.15, 0.55);
 
-//O ponto (espaço LOCAL do volume) cai dentro de algum lasso?
+//O conjunto de lassos REMOVE este ponto (espaço LOCAL do volume)?
 //
-//Projeta com a matriz congelada daquele lasso e consulta a máscara. Sem
-//hoisting de A/B pra fora do laço de propósito: com N dinâmico, os A/B
+//Duas operações num laço só, porque a resposta é uma conjunção:
+//
+//    removido = (dentro de ALGUM remove) OU (fora de ALGUM keep)
+//
+//Os remove se combinam por UNIÃO (basta um pegar o ponto) e os keep por
+//INTERSEÇÃO (tem que estar dentro de todos pra sobreviver). É a semântica que
+//deixa cortar de dois ângulos pra isolar uma caixa: cada keep é um recorte, e o
+//que resta é o comum aos dois.
+//
+//Sem hoisting de A/B pra fora do laço de propósito: com N dinâmico, os A/B
 //viveriam num array de tamanho fixo indexado dinamicamente, que a GPU joga em
 //memória privada (spill) — sairia mais caro que refazer a mat4×vec4 aqui.
-fn insideAnyLasso(pLocal: vec3f, count: u32) -> bool {
+fn lassoRemoves(pLocal: vec3f, count: u32, keepCount: u32) -> bool {
+    var keepHits = 0u;
     for (var i = 0u; i < count; i = i + 1u) {
-        let c = lassoClip[i] * vec4f(pLocal, 1.0);
+        let lasso = lassos[i];
+        let c = lasso.clipFromLocal * vec4f(pLocal, 1.0);
+        var inside = false;
         //Atrás do olho congelado: projeta espelhado, cairia no polígono errado.
-        if (c.w <= 0.0) {
-            continue;
+        if (c.w > 0.0) {
+            //NDC → uv, com o y invertido (NDC cresce pra cima, v cresce pra
+            //baixo). Fora de [0,1] o clamp-to-edge devolve o anel de borda, que
+            //a rasterização zera de propósito — ou seja, "fora".
+            let uv = vec2f(c.x / c.w, -c.y / c.w) * 0.5 + vec2f(0.5);
+            //textureSampleLevel (LOD explícito) é válido em fluxo não-uniforme;
+            //textureSample não seria, e este "if" é exatamente isso.
+            inside = textureSampleLevel(lassoMasks, samp, uv, i, 0.0).r > 0.5;
         }
-        //NDC → uv, com o y invertido (NDC cresce pra cima, v cresce pra baixo).
-        //Fora de [0,1] o clamp-to-edge devolve o anel de borda, que a
-        //rasterização zera de propósito — ou seja, "fora".
-        let uv = vec2f(c.x / c.w, -c.y / c.w) * 0.5 + vec2f(0.5);
-        //textureSampleLevel (LOD explícito) é válido em fluxo não-uniforme;
-        //textureSample não seria, e este "if" é exatamente isso.
-        if (textureSampleLevel(lassoMasks, samp, uv, i, 0.0).r > 0.5) {
+        if (lasso.keep > 0.5) {
+            if (inside) {
+                keepHits = keepHits + 1u;
+            }
+        } else if (inside) {
+            //Um remove basta: nenhum keep ressuscita o que outro lasso tirou.
             return true;
         }
     }
-    return false;
+    //Ficou de fora de algum keep ⇒ está fora do recorte ⇒ removido. Sem keep
+    //nenhum, keepCount é 0 e isto é falso — o crop não existe até alguém pedir.
+    return keepHits < keepCount;
 }
 
 //Verde-piscina: a segunda ferramenta precisa de uma cor que não se confunda
@@ -300,6 +326,7 @@ fn fs(in: VsOut) -> @location(0) vec4f {
     let nChunksMax = vec3f(nChunks) - vec3f(1.0);
     //uniformes: saem do laço
     let lassoCount = u32(params.lassoCount);
+    let lassoKeepCount = u32(params.lassoKeepCount);
     let scalpelCount = u32(params.scalpelCount);
 
     var acc = vec4f(0.0);
@@ -341,7 +368,7 @@ fn fs(in: VsOut) -> @location(0) vec4f {
         //segmento inteiro, então ou ele todo entra ou ele todo sai.
         var lassoHit = false;
         if (lassoCount > 0u) {
-            lassoHit = insideAnyLasso(pLocal + rd * (step * 0.5), lassoCount);
+            lassoHit = lassoRemoves(pLocal + rd * (step * 0.5), lassoCount, lassoKeepCount);
             //O CORTE. Com a debug view ligada não corta: cai fora do if e o
             //segmento segue o caminho normal pra ser PINTADO lá embaixo.
             if (lassoHit && params.lassoDebug <= 0.5) {
@@ -660,18 +687,20 @@ export class VolumeRaycastLassoMaterial extends Material {
                 [CONTOUR_MASK_SIZE, CONTOUR_MASK_SIZE, 1],
             );
         }
-        //As matrizes na mesma ordem das camadas: o índice do laço do shader
-        //serve pros dois.
-        const matrices = new Float32Array(layers * 16);
+        //struct Lasso: mat4x4f (64B) + f32, stride 80 pelo alinhamento de 16 do
+        //mat4 — 20 floats por lasso, keep no índice 16. Mesma ordem das camadas:
+        //o índice do laço do shader serve pros dois.
+        const packed = new Float32Array(layers * 20);
         for (let i = 0; i < lassos.length; i++) {
-            matrices.set(lassos[i].clipFromLocal, i * 16);
+            packed.set(lassos[i].clipFromLocal, i * 20);
+            packed[i * 20 + 16] = lassos[i].keep ? 1 : 0;
         }
         this.lassoClipBuffer = this.device.createBuffer({
-            label: "VolumeRaycastLassoMaterial lasso matrices",
-            size: matrices.byteLength,
+            label: "VolumeRaycastLassoMaterial lassos",
+            size: packed.byteLength,
             usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
         });
-        this.device.queue.writeBuffer(this.lassoClipBuffer, 0, matrices);
+        this.device.queue.writeBuffer(this.lassoClipBuffer, 0, packed);
     }
 
     /**
@@ -894,7 +923,8 @@ export class VolumeRaycastLassoMaterial extends Material {
                 this.useGradient, this.gradientType, this.useSkip, this.chunkSizeVoxels,
                 this.spacing[0], this.spacing[1], this.spacing[2], this.lassos.length,
                 this.numChunksX, this.numChunksY, this.numChunksZ, this.lassoDebug,
-                this.scalpels.length, this.scalpelDebug, 0, 0,
+                this.scalpels.length, this.scalpelDebug,
+                this.lassos.filter((l) => l.keep).length, 0,
             ]),
         );
     }

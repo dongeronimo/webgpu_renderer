@@ -53,20 +53,36 @@ export type ContourCaptureOverlayProps = {
     /** Preenchimento dos contornos já fechados (a prévia do que vai sumir). */
     fill: string;
     /**
+     * Alt na hora de começar o traço INVERTE a operação da ferramenta?
+     *
+     * O overlay não sabe o que "invertido" significa — só que, quando é o caso,
+     * o preenchimento vai pra FORA do contorno (porque o que some é o resto) e
+     * o flag viaja no onCommit. Quem dá sentido a ele é o consumidor.
+     *
+     * Lido no pointerdown e congelado ali, como a câmera: o traço inteiro é de
+     * um tipo só, e apertar Alt no meio não muda o que já começou. De quebra,
+     * ler só o altKey do evento evita o keydown de Alt solto, que no Windows
+     * rouba o foco pro menu do browser.
+     */
+    altInverts?: boolean;
+    /**
      * Chamado quando um contorno fecha. Recebe os pontos já achatados
-     * (x,y intercalados, NDC, aberto) e a câmera CONGELADA no início do traço.
+     * (x,y intercalados, NDC, aberto), a câmera CONGELADA no início do traço, e
+     * se o traço saiu invertido (só possível com altInverts).
      * Quem monta o dado da ferramenta e despacha é o consumidor.
      */
-    onCommit: (points: Float32Array, clipFromLocal: Mat4) => void;
+    onCommit: (points: Float32Array, clipFromLocal: Mat4, inverted: boolean) => void;
 };
 
-export function ContourCaptureOverlay({ world, ink, fill, onCommit }: ContourCaptureOverlayProps) {
+export function ContourCaptureOverlay({ world, ink, fill, altInverts = false, onCommit }: ContourCaptureOverlayProps) {
     const canvasRef = useRef<HTMLCanvasElement>(null);
     //Tudo em ref, nada em state: um traço à mão livre dispara pointermove a
     //~120Hz, e re-renderizar o React a cada ponto seria absurdo. O canvas é
     //pintado imperativamente pelo próprio handler.
     const current = useRef<NdcPoint[]>([]);
-    const committed = useRef<NdcPoint[][]>([]);
+    //inverted junto dos pontos: dois traços da mesma sessão podem ser de tipos
+    //diferentes, e o desenho de cada um depende do tipo DELE.
+    const committed = useRef<{ pts: NdcPoint[]; inverted: boolean }[]>([]);
     const stroke = useRef<{
         pointerId: number;
         lastX: number;
@@ -76,6 +92,8 @@ export function ContourCaptureOverlay({ world, ink, fill, onCommit }: ContourCap
         //daí em diante a câmera não pode mais mudar (este overlay come os
         //eventos que a moveriam).
         clipFromLocal: Mat4;
+        //Alt estava apertado quando o traço começou?
+        inverted: boolean;
     } | null>(null);
     const rect = useRef<DOMRect | null>(null);
     //ink/fill num ref pra o draw() não depender do ciclo de render do React.
@@ -84,6 +102,27 @@ export function ContourCaptureOverlay({ world, ink, fill, onCommit }: ContourCap
 
     function ndcToCss(p: NdcPoint, r: DOMRect): [number, number] {
         return [(p.x + 1) * 0.5 * r.width, (1 - p.y) * 0.5 * r.height];
+    }
+
+    /**
+     * Pinta o que a operação AFETA: o miolo do contorno no caso normal, tudo
+     * MENOS o miolo quando invertido.
+     *
+     * O invertido sai de graça da regra even-odd: um retângulo da tela inteira
+     * mais o contorno dentro dele deixa o miolo com winding par, ou seja, de
+     * fora. Nada de recortar na mão.
+     *
+     * O caso normal usa NONZERO (o default), que é a MESMA regra da
+     * rasterização em contourMask.ts — traço à mão livre se auto-intersecta e
+     * as duas regras têm que concordar, senão a prévia mente sobre o corte.
+     */
+    function fillRegion(ctx: CanvasRenderingContext2D, r: DOMRect, inverted: boolean) {
+        if (!inverted) {
+            ctx.fill();
+            return;
+        }
+        ctx.rect(0, 0, r.width, r.height);
+        ctx.fill("evenodd");
     }
 
     function tracePath(ctx: CanvasRenderingContext2D, pts: NdcPoint[], r: DOMRect) {
@@ -126,11 +165,11 @@ export function ContourCaptureOverlay({ world, ink, fill, onCommit }: ContourCap
         //Os fechados: contorno + interior translúcido. Regra NONZERO (o default
         //do canvas), a mesma da rasterização em contourMask.ts — se as duas
         //divergirem, a prévia mente sobre o corte.
-        for (const pts of committed.current) {
-            tracePath(ctx, pts, r);
+        for (const lasso of committed.current) {
+            tracePath(ctx, lasso.pts, r);
             ctx.closePath();
             ctx.fillStyle = colors.current.fill;
-            ctx.fill();
+            fillRegion(ctx, r, lasso.inverted);
             strokeTwice(ctx, 3.5, 1.5);
         }
 
@@ -139,6 +178,13 @@ export function ContourCaptureOverlay({ world, ink, fill, onCommit }: ContourCap
             return;
         }
         tracePath(ctx, pts, r);
+        //Prévia já durante o traço quando ele é invertido: sem isso o usuário
+        //só descobriria que sombreou o mundo inteiro depois de soltar.
+        if (stroke.current?.inverted) {
+            ctx.fillStyle = colors.current.fill;
+            fillRegion(ctx, r, true);
+            tracePath(ctx, pts, r); //o fill consumiu o path
+        }
         ctx.setLineDash([]);
         strokeTwice(ctx, 3.5, 1.5);
 
@@ -210,6 +256,7 @@ export function ContourCaptureOverlay({ world, ink, fill, onCommit }: ContourCap
             lastX: e.clientX,
             lastY: e.clientY,
             clipFromLocal: world.captureClipFromLocal(),
+            inverted: altInverts && e.altKey,
         };
         //captura: o move continua chegando mesmo se o ponteiro sair do overlay
         e.currentTarget.setPointerCapture(e.pointerId);
@@ -245,7 +292,7 @@ export function ContourCaptureOverlay({ world, ink, fill, onCommit }: ContourCap
             draw();
             return;
         }
-        committed.current.push(pts);
+        committed.current.push({ pts, inverted: s.inverted });
         //Achata pro formato que a rasterização e o shader consomem. O primeiro
         //ponto NÃO é repetido no fim: o fechamento é implícito.
         const points = new Float32Array(pts.length * 2);
@@ -253,7 +300,7 @@ export function ContourCaptureOverlay({ world, ink, fill, onCommit }: ContourCap
             points[i * 2] = pts[i].x;
             points[i * 2 + 1] = pts[i].y;
         }
-        onCommit(points, s.clipFromLocal);
+        onCommit(points, s.clipFromLocal, s.inverted);
         draw();
     }
 

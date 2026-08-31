@@ -131,6 +131,14 @@ async function main() {
       lastTime = performance.now(); //zera o relógio: o tempo de carga não é deltaTime
       requestAnimationFrame(frame);
     }
+    else if (currentWorld.skipFrame()) {
+       //Frame pulado: nem update, nem render, nem submit. O canvas segue
+       //mostrando o último frame apresentado — não há imagem a "preservar",
+       //ela simplesmente continua lá. O lastTime avança pra o deltaTime do
+       //frame seguinte não vir inflado com o tempo parado.
+       lastTime = time;
+       requestAnimationFrame(frame);
+    }
     else {
        const deltaTime = (time - lastTime) / 1000; //segundos desde o frame anterior
        gpuTimer.beginFrame(); //zera os slots de timestamp e conta o fps

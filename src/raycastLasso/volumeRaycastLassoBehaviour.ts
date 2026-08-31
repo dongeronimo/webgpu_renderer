@@ -13,7 +13,7 @@
 //o 1º update não conta como mudança — mesmo padrão do setCtf no baseline.
 import { Behaviour } from "../behaviour";
 import { store } from "../redux/store";
-import { ctfVisibleMask, computeSkipMap } from "../raycastESS/chunkOccupancy";
+import { LassoSatCache, skipMapWithLassos, type ChunkGridLocal } from "./lassoChunkCull";
 import { VolumeRaycastLassoMaterial } from "./volumeRaycastLassoMaterial";
 
 export class VolumeRaycastLassoBehaviour extends Behaviour {
@@ -38,8 +38,35 @@ export class VolumeRaycastLassoBehaviour extends Behaviour {
         private readonly histogramBins: number,
         private readonly histogramMin: number,
         private readonly histogramMax: number,
+        //A grade de chunks no espaço local — o culling projeta o AABB de cada
+        //chunk pra saber se o lasso já o removeu inteiro.
+        private readonly grid: ChunkGridLocal,
     ) {
         super();
+    }
+
+    //As SATs das máscaras, memoizadas por lasso: o skip-map é refeito a cada
+    //mudança de CTF (inclusive a cada evento de arrasto no editor), e
+    //rerasterizar 512² por lasso nesse ritmo travaria a edição.
+    private readonly sats = new LassoSatCache();
+
+    /**
+     * O skip-map completo: ocupação × CTF, menos os chunks que os lassos já
+     * removeram inteiros. Num lugar só porque as duas entradas (CTF e lista de
+     * lassos) mudam por caminhos diferentes e o resultado é o mesmo buffer.
+     */
+    private rebuildSkipMap(): void {
+        const state = store.getState();
+        this.material.setSkipMap(skipMapWithLassos(
+            this.occupancy,
+            state.ctf.points,
+            this.histogramBins,
+            this.histogramMin,
+            this.histogramMax,
+            state.lasso.items,
+            this.grid,
+            this.sats,
+        ));
     }
 
     update(_deltaTime: number): void {
@@ -49,8 +76,7 @@ export class VolumeRaycastLassoBehaviour extends Behaviour {
             this.lastCtf = points;
             this.material.setCtf(points);
             //CTF mudou → refaz o skip-map (a única parte por-CTF do ESS)
-            const mask = ctfVisibleMask(points, this.histogramBins, this.histogramMin, this.histogramMax);
-            this.material.setSkipMap(computeSkipMap(this.occupancy, mask));
+            this.rebuildSkipMap();
         }
         //alphaScale: o mesmo knob do mundo CT
         const alpha = store.getState().textureBasedCT.alphaScale;
@@ -82,6 +108,9 @@ export class VolumeRaycastLassoBehaviour extends Behaviour {
         if (lassos !== this.lastLassos) {
             this.lastLassos = lassos;
             this.material.setLassos(lassos);
+            //Lasso novo (ou desfeito) muda quais chunks estão inteiramente
+            //removidos — é aqui que o ESS aprende sobre o corte.
+            this.rebuildSkipMap();
         }
         //Debug view das máscaras: só um float nos params, sem rebuild nenhum.
         if (raycast.lassoDebugView !== this.lastLassoDebug) {

@@ -35,6 +35,18 @@ export interface LassoData {
      * congelada. O teste dentro/fora é `(M·p).xy / (M·p).w` contra `points`.
      */
     clipFromLocal: Mat4;
+    /**
+     * false = REMOVER o que está dentro (o normal). true = MANTER só o que
+     * está dentro, jogando fora todo o resto — o crop.
+     *
+     * Os keep se combinam por INTERSEÇÃO: com dois deles, sobra só o que está
+     * dentro dos dois. É a semântica certa de recorte, e é o que deixa cortar
+     * de dois ângulos pra isolar uma caixa no espaço.
+     *
+     * Vive aqui e não num "modo" global porque é propriedade DAQUELE traço:
+     * decidida com o Alt na hora de desenhar e congelada junto com a câmera.
+     */
+    keep: boolean;
 }
 
 //Contador de módulo: ids não podem vir do índice na lista (remover um do meio

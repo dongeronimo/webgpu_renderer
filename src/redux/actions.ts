@@ -48,6 +48,11 @@ export const SET_RAYCAST_GRADIENT_MODE = "SET_RAYCAST_GRADIENT_MODE";
 //A primeira e mais brutal otimização de raycast é reduzir o framebuffer.
 //Menos fragmentos = menos raios.
 export const SET_RAYCAST_FRAMEBUFFER_SCALE = "SET_RAYCAST_FRAMEBUFFER_SCALE";
+//Ajuste DINÂMICO do framebuffer: com isto ligado, a
+//FramebufferAutoScaleBehaviour despacha SET_RAYCAST_FRAMEBUFFER_SCALE sozinha
+//quando o fps cai. O valor continua sendo um só, e o slider do painel anda
+//junto — o automático não tem um caminho paralelo pro tamanho do alvo.
+export const SET_RAYCAST_AUTO_FRAMEBUFFER = "SET_RAYCAST_AUTO_FRAMEBUFFER";
 //Empty-space skipping (mundo raycastESS): liga/desliga o skip de chunks vazios,
 //pra comparar velocidade com/sem. A VolumeRaycastESSBehaviour lê e repassa.
 export const SET_RAYCAST_ESS = "SET_RAYCAST_ESS";
@@ -237,6 +242,11 @@ export interface SetScalpelDebugViewAction {
     payload: boolean;
 }
 
+export interface SetRaycastAutoFramebufferAction {
+    type: typeof SET_RAYCAST_AUTO_FRAMEBUFFER;
+    payload: boolean;
+}
+
 export interface HistoryUndoAction {
     type: typeof HISTORY_UNDO;
 }
@@ -387,6 +397,10 @@ export function lassoRemoved(lasso: LassoData): LassoRemovedAction {
     return { type: LASSO_REMOVED, payload: lasso };
 }
 
+export function setRaycastAutoFramebuffer(enabled: boolean): SetRaycastAutoFramebufferAction {
+    return { type: SET_RAYCAST_AUTO_FRAMEBUFFER, payload: enabled };
+}
+
 export function undo(): HistoryUndoAction {
     return { type: HISTORY_UNDO };
 }
@@ -443,6 +457,7 @@ export type AppAction =
     | ScalpelRemovedAction
     | SetScalpelMarginAction
     | SetScalpelDebugViewAction
+    | SetRaycastAutoFramebufferAction
     | HistoryUndoAction
     | HistoryRedoAction
     | LassoAddedAction

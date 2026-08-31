@@ -13,6 +13,7 @@ import { setCtfHuRange } from "../redux/actions";
 import { VolumeRaycastESSMaterial } from "./volumeRaycastESSMaterial";
 import { VolumeRaycastESSBehaviour } from "./volumeRaycastESSBehaviour";
 import { OrbitCameraBehaviour } from "../raycast/orbitCameraBehaviour";
+import { FramebufferAutoScaleBehaviour } from "../raycast/framebufferAutoScaleBehaviour";
 import { createGradientTexture, gradientParamsFromMetadata } from "../textureStackVolumeRenderCT/gradientCompute";
 import { Behaviour } from "../behaviour";
 import { loadChunkOccupancy, ctfVisibleMask, computeSkipMap } from "./chunkOccupancy";
@@ -172,6 +173,11 @@ export class RaycastESSWorld extends World {
         volumeNode.behaviours.push(brain);
 
         this.root.addBehaviour(new FramebufferResizerBehaviour());
+        //O toggle do ajuste dinâmico mora no painel de render, que ESTE mundo
+        //também usa — sem a behaviour aqui o controle apareceria e não faria
+        //nada. Acréscimo, não refatoração: off por default, então o baseline de
+        //A/B continua idêntico ao que era.
+        this.root.addBehaviour(new FramebufferAutoScaleBehaviour());
     }
 
     resizeFramebuffer(factor: number) {
