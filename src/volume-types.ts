@@ -71,8 +71,27 @@ export interface VolumeMetadata {
 
   /** Espaçamento [linha, coluna] entre centros de pixels, em mm. Par de strings decimais. */
   pixelSpacing: DicomTagValue;
-  /** Espessura da fatia em mm (string decimal). */
+  /**
+   * Espessura da fatia em mm (string decimal) — a ESPESSURA DA FATIA, não o
+   * passo entre elas. NÃO use pra dimensionar o volume em Z: exames com fatias
+   * sobrepostas (ex.: TOF de 1.2 mm adquirido a cada 0.6 mm) ficariam
+   * esticados. Use sliceSpacingMm().
+   */
   sliceThickness: string;
+  /**
+   * SpacingBetweenSlices do DICOM, em mm (string decimal). "" quando a tag
+   * não existe — comum em CT.
+   */
+  spacingBetweenSlices?: string;
+  /**
+   * Distância REAL entre centros de fatias vizinhas, em mm, derivada pelo
+   * conversor a partir das posições das fatias (mediana dos passos). Este é o
+   * número que dimensiona o volume em Z.
+   *
+   * Ausente nos volumes exportados antes desse campo existir — daí
+   * sliceSpacingMm() cair pra sliceThickness.
+   */
+  sliceSpacing?: number;
   /** Cossenos diretores dos eixos da imagem no espaço do paciente (6 strings decimais). */
   imageOrientationPatient: DicomTagValue;
   /** Posição do primeiro voxel da primeira fatia no espaço do paciente, em mm (3 strings decimais). */
@@ -164,6 +183,26 @@ export interface ChunkHistograms {
 export function dicomTagNumber(value: DicomTagValue, index = 0): number {
   const raw = Array.isArray(value) ? value[index] : index === 0 ? value : undefined;
   return raw === undefined || raw === "" ? NaN : parseFloat(raw);
+}
+
+/**
+ * mm entre centros de fatias vizinhas — o tamanho do voxel no eixo Z.
+ *
+ * Prefere sliceSpacing (derivado das posições reais das fatias pelo
+ * conversor), cai pra SpacingBetweenSlices e só então pra sliceThickness,
+ * que é a espessura do corte e diverge do passo quando as fatias se
+ * sobrepõem. NaN se nada disso for utilizável — o chamador decide o fallback,
+ * como nos outros leitores de tag daqui.
+ */
+export function sliceSpacingMm(metadata: VolumeMetadata): number {
+  if (typeof metadata.sliceSpacing === "number" && metadata.sliceSpacing > 0) {
+    return metadata.sliceSpacing;
+  }
+  // SpacingBetweenSlices vem NEGATIVO em exames adquiridos no sentido inverso
+  // (visto num CT abdominal: -0.5). É distância, o sinal é do sentido do scan.
+  const between = Math.abs(dicomTagNumber(metadata.spacingBetweenSlices ?? ""));
+  if (Number.isFinite(between) && between > 0) return between;
+  return Math.abs(dicomTagNumber(metadata.sliceThickness));
 }
 
 /**

@@ -17,7 +17,7 @@
 //queue garante que o compute termina antes de qualquer pass que a
 //sampleie). Quem chama é dono da textura e a destrói. Sem classe, sem
 //registry de computes — quando houver mais casos a gente generaliza.
-import { dicomTagNumber, type VolumeMetadata } from "../volume-types";
+import { dicomTagNumber, sliceSpacingMm, type VolumeMetadata } from "../volume-types";
 
 const GRADIENT_WGSL = /* wgsl */ `
 struct Params {
@@ -100,8 +100,8 @@ function getPipeline(device: GPUDevice): GPUComputePipeline {
 
 export interface GradientComputeParams {
     /**
-     * mm por voxel [x, y, z] — no CT: [pixelSpacing[1], pixelSpacing[0],
-     * sliceThickness] (a MESMA convenção do cálculo de physX/Y/Z no
+     * mm por voxel [x, y, z] — do exame: [pixelSpacing[1], pixelSpacing[0],
+     * passo entre fatias] (a MESMA convenção do cálculo de physX/Y/Z no
      * mundo). Use [1,1,1] pra volume sintético/isotrópico.
      */
     spacing: [number, number, number];
@@ -125,7 +125,7 @@ export interface GradientComputeParams {
 export function gradientParamsFromMetadata(metadata: VolumeMetadata): GradientComputeParams {
     const sx = dicomTagNumber(metadata.pixelSpacing, 1);
     const sy = dicomTagNumber(metadata.pixelSpacing, 0);
-    const sz = dicomTagNumber(metadata.sliceThickness);
+    const sz = sliceSpacingMm(metadata);
     const spacing: [number, number, number] = [
         Number.isFinite(sx) && sx > 0 ? sx : 1,
         Number.isFinite(sy) && sy > 0 ? sy : 1,

@@ -4,7 +4,7 @@ import { Node } from "../node";
 import { RotationBehaviour } from "../rotation_behaviour";
 import { World } from "../world";
 import { loadVolumeTexture } from "../volumeLoader";
-import { dicomTagNumber } from "../volume-types";
+import { dicomTagNumber, sliceSpacingMm } from "../volume-types";
 import { TextureSliceGenerator } from "../textureStackVolumeRender/textureSliceGenerator";
 import { SetNumSlicesBehaviour } from "./setNumSlicesBehaviour";
 import { SetCtfBehaviour } from "./setCtfBehaviour";
@@ -98,7 +98,7 @@ export class TextureStackVolumeRendererCT extends World {
         //em mm, SliceThickness em mm — normalizado pro maior eixo = 1.
         const physX = metadata.width * dicomTagNumber(metadata.pixelSpacing, 1);
         const physY = metadata.height * dicomTagNumber(metadata.pixelSpacing, 0);
-        const physZ = metadata.numSlices * dicomTagNumber(metadata.sliceThickness);
+        const physZ = metadata.numSlices * sliceSpacingMm(metadata);
         const stackNode = new Node();
         stackNode.name = "Volume";
         if (Number.isFinite(physX) && Number.isFinite(physY) && Number.isFinite(physZ) && physZ > 0) {

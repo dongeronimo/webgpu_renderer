@@ -93,21 +93,18 @@ def read_dicom_files(input_dir: Path) -> List[pydicom.FileDataset]:
     return dicom_files
 
 
-def select_largest_series(dicom_files: List[pydicom.FileDataset]) -> List[pydicom.FileDataset]:
+def group_series(dicom_files: List[pydicom.FileDataset]) -> Dict[Any, List[pydicom.FileDataset]]:
     """
-    Keep only the largest coherent series from the input.
+    Group slices by (SeriesInstanceUID, Rows, Columns).
 
-    Real-world DICOM dirs often mix multiple series (axial + scout/localizer,
-    reconstructions...). Slices are grouped by (SeriesInstanceUID, Rows, Columns)
-    and the group with the most slices wins; everything else is discarded with
-    a warning. The shape is part of the key so a series with mixed dimensions
-    can never crash the volume assembly.
+    The shape is part of the key so a series with mixed dimensions can never
+    crash the volume assembly.
 
     Args:
         dicom_files: List of DICOM datasets, possibly from several series
 
     Returns:
-        Slices belonging to the largest series only
+        Dict keyed by (uid, rows, cols), each mapping to that group's slices
     """
     groups: Dict[Any, List[pydicom.FileDataset]] = {}
     for ds in dicom_files:
@@ -117,11 +114,164 @@ def select_largest_series(dicom_files: List[pydicom.FileDataset]) -> List[pydico
             int(getattr(ds, 'Columns', 0)),
         )
         groups.setdefault(key, []).append(ds)
+    return groups
+
+
+def describe_series(groups: Dict[Any, List[pydicom.FileDataset]]) -> str:
+    """Render a series inventory, biggest first, one line per group."""
+    lines = []
+    for (uid, rows, cols), slices in sorted(groups.items(), key=lambda kv: -len(kv[1])):
+        first = slices[0]
+        desc = str(getattr(first, 'SeriesDescription', '') or '')
+        number = str(getattr(first, 'SeriesNumber', '?'))
+        modality = str(getattr(first, 'Modality', '') or '')
+        lines.append(f"  {len(slices):5d} slices | series {number:>5} | {modality:<3} | "
+                     f"{cols}x{rows} | '{desc}' | {uid}")
+    return "\n".join(lines)
+
+
+def filter_series(dicom_files: List[pydicom.FileDataset],
+                  series_desc: str = None,
+                  series_uid: str = None) -> List[pydicom.FileDataset]:
+    """
+    Keep only the slices of the requested series.
+
+    A study directory usually holds every series side by side, and the one you
+    want is rarely the biggest one (a diffusion series can easily outnumber the
+    angiography). SeriesDescription is matched case-insensitively and
+    whitespace-trimmed; it is NOT unique (a series and its reconstruction share
+    the description), so several groups can survive the filter and
+    select_largest_series() then picks the actual volume. SeriesInstanceUID is
+    the unambiguous key when that is not good enough.
+
+    Args:
+        dicom_files: All slices read from the input directory
+        series_desc: SeriesDescription to keep, or None for no filtering
+        series_uid: SeriesInstanceUID to keep, or None for no filtering
+
+    Returns:
+        The matching slices
+
+    Raises:
+        SystemExit: if nothing matches (the available series are listed first)
+    """
+    if not series_desc and not series_uid:
+        return dicom_files
+
+    wanted_desc = series_desc.strip().lower() if series_desc else None
+
+    def matches(ds):
+        if series_uid and str(getattr(ds, 'SeriesInstanceUID', '')) != series_uid:
+            return False
+        if wanted_desc is not None:
+            desc = str(getattr(ds, 'SeriesDescription', '') or '').strip().lower()
+            if desc != wanted_desc:
+                return False
+        return True
+
+    kept = [ds for ds in dicom_files if matches(ds)]
+
+    if not kept:
+        print("\n✗ No slice matches the requested series.")
+        print("  Available series:")
+        print(describe_series(group_series(dicom_files)))
+        sys.exit(1)
+
+    criterion = series_uid if series_uid else f"'{series_desc}'"
+    print(f"\n✓ Series filter {criterion}: kept {len(kept)}/{len(dicom_files)} slices")
+    return kept
+
+
+def slice_normal(ds):
+    """
+    Unit normal of the slice plane, from the two ImageOrientationPatient
+    direction cosines. None when the tag is missing or malformed.
+    """
+    iop = getattr(ds, 'ImageOrientationPatient', None)
+    if iop is None or len(iop) != 6:
+        return None
+    row = np.array([float(v) for v in iop[:3]])
+    col = np.array([float(v) for v in iop[3:]])
+    return np.cross(row, col)
+
+
+def derive_slice_spacing(sorted_files: List[pydicom.FileDataset]) -> float:
+    """
+    Physical distance between neighbouring slice centres, in mm.
+
+    SliceThickness is the WRONG number to size a volume with: slices routinely
+    overlap (thickness 1.2 mm acquired every 0.6 mm) or leave a gap, and using
+    it then stretches or squashes the reconstruction along Z. The real step is
+    the distance between consecutive slice positions measured along the slice
+    normal. The MEDIAN of those distances is used so one missing slice in the
+    middle of the series cannot skew it.
+
+    Falls back to SpacingBetweenSlices, then SliceThickness, then 1.0 mm.
+
+    Args:
+        sorted_files: Slices already ordered along the scan axis
+
+    Returns:
+        Slice spacing in mm (always > 0)
+    """
+    first = sorted_files[0]
+
+    normal = None
+    for ds in sorted_files:
+        normal = slice_normal(ds)
+        if normal is not None:
+            break
+
+    if normal is not None and len(sorted_files) > 1:
+        positions = []
+        for ds in sorted_files:
+            ipp = getattr(ds, 'ImagePositionPatient', None)
+            if ipp is not None and len(ipp) == 3:
+                position = np.array([float(v) for v in ipp])
+                positions.append(float(np.dot(position, normal)))
+        if len(positions) > 1:
+            steps = np.abs(np.diff(np.array(positions)))
+            steps = steps[steps > 1e-6]
+            if steps.size:
+                spacing = float(np.median(steps))
+                thickness = float(getattr(first, 'SliceThickness', 0) or 0)
+                note = ""
+                if thickness > 0 and abs(thickness - spacing) > 1e-3:
+                    note = f"  (SliceThickness is {thickness:g} mm - slices overlap or gap)"
+                print(f"Slice spacing: {spacing:.4f} mm from ImagePositionPatient{note}")
+                return spacing
+
+    for attr in ('SpacingBetweenSlices', 'SliceThickness'):
+        value = getattr(first, attr, None)
+        if value:
+            spacing = abs(float(value))
+            if spacing > 0:
+                print(f"Slice spacing: {spacing:.4f} mm from {attr} (no usable positions)")
+                return spacing
+
+    print("⚠  Slice spacing unknown, assuming 1.0 mm")
+    return 1.0
+
+
+def select_largest_series(dicom_files: List[pydicom.FileDataset]) -> List[pydicom.FileDataset]:
+    """
+    Keep only the largest coherent series from the input.
+
+    Real-world DICOM dirs often mix multiple series (axial + scout/localizer,
+    reconstructions...). The group with the most slices wins; everything else
+    is discarded with a warning.
+
+    Args:
+        dicom_files: List of DICOM datasets, possibly from several series
+
+    Returns:
+        Slices belonging to the largest series only
+    """
+    groups = group_series(dicom_files)
 
     if len(groups) > 1:
         print(f"\n⚠  Input contains {len(groups)} distinct series/shapes:")
-        for (uid, rows, cols), slices in sorted(groups.items(), key=lambda kv: -len(kv[1])):
-            print(f"     {len(slices):4d} slices  {cols}x{rows}  {uid[:48]}")
+        print(describe_series(groups))
 
     best_key, best_slices = max(groups.items(), key=lambda kv: len(kv[1]))
     if len(best_slices) < len(dicom_files):
@@ -146,14 +296,6 @@ def sort_dicom_slices(dicom_files: List[pydicom.FileDataset]) -> List[pydicom.Fi
     Returns:
         Sorted list of DICOM datasets
     """
-    def slice_normal(ds):
-        iop = getattr(ds, 'ImageOrientationPatient', None)
-        if iop is None or len(iop) != 6:
-            return None
-        row = np.array([float(v) for v in iop[:3]])
-        col = np.array([float(v) for v in iop[3:]])
-        return np.cross(row, col)
-
     # All slices of a series share the orientation; take it from the first
     # slice that has one so every sort key uses the SAME normal.
     normal = None
@@ -180,7 +322,8 @@ def sort_dicom_slices(dicom_files: List[pydicom.FileDataset]) -> List[pydicom.Fi
     return sorted_files
 
 
-def extract_metadata(dicom_files: List[pydicom.FileDataset], global_min: float, global_max: float, anonymize: bool = True) -> Dict[str, Any]:
+def extract_metadata(dicom_files: List[pydicom.FileDataset], global_min: float, global_max: float,
+                     slice_spacing: float, anonymize: bool = True) -> Dict[str, Any]:
     """
     Extract relevant metadata from DICOM series.
     
@@ -188,6 +331,8 @@ def extract_metadata(dicom_files: List[pydicom.FileDataset], global_min: float, 
         dicom_files: List of DICOM datasets
         global_min: Minimum HU value across all slices
         global_max: Maximum HU value across all slices
+        slice_spacing: Real distance between slice centres in mm (see
+            derive_slice_spacing) - this, not sliceThickness, sizes the volume
         anonymize: Whether to anonymize patient identifiers
         
     Returns:
@@ -260,6 +405,11 @@ def extract_metadata(dicom_files: List[pydicom.FileDataset], global_min: float, 
         # Image information
         "pixelSpacing": safe_get(first_ds, 'PixelSpacing'),
         "sliceThickness": safe_get(first_ds, 'SliceThickness'),
+        "spacingBetweenSlices": safe_get(first_ds, 'SpacingBetweenSlices'),
+        # Distance between slice centres in mm, derived from the slice
+        # positions. Use THIS to size the volume along Z: sliceThickness is
+        # the slab thickness and does not match the step when slices overlap.
+        "sliceSpacing": float(slice_spacing),
         "imageOrientationPatient": safe_get(first_ds, 'ImageOrientationPatient'),
         "imagePositionPatient": safe_get(first_ds, 'ImagePositionPatient'),
         
@@ -279,95 +429,136 @@ def extract_metadata(dicom_files: List[pydicom.FileDataset], global_min: float, 
     return metadata
 
 
-def perona_malik_gpu(volume: np.ndarray, iterations: int = 5, K: float = 50.0, 
+def choose_slab_depth(depth: int, height: int, width: int,
+                      vram_fraction: float = 0.6) -> int:
+    """
+    How many slices to diffuse at once so the GPU working set fits in VRAM.
+
+    One slab costs about SLAB_BUFFERS arrays of its own size: the padded input,
+    the accumulating divergence, the result, and the two or three temporaries
+    alive inside the per-neighbour step. Only a fraction of the FREE VRAM is
+    claimed, because the driver, CuPy's own pools and whatever else is on the
+    display adapter also need room.
+
+    Args:
+        depth, height, width: Volume shape (Z, Y, X)
+        vram_fraction: Share of the currently free VRAM to spend
+
+    Returns:
+        Slice count per slab, clamped to [1, depth]
+    """
+    SLAB_BUFFERS = 8
+    slice_bytes = height * width * 4  # float32
+
+    try:
+        free_bytes, _total = cp.cuda.Device().mem_info
+    except Exception:
+        free_bytes = 1 << 30  # sem info confiável: assume 1 GB e segue
+
+    budget = int(free_bytes * vram_fraction)
+    slab = budget // (SLAB_BUFFERS * slice_bytes)
+    return int(max(1, min(depth, slab)))
+
+
+def perona_malik_gpu(volume: np.ndarray, iterations: int = 5, K: float = 50.0,
                      lambda_param: float = 0.1, diffusion_type: int = 1) -> np.ndarray:
     """
     Apply Perona-Malik anisotropic diffusion using GPU acceleration via CuPy.
-    
+
+    The volume stays in host memory and is diffused SLAB BY SLAB along Z, so
+    the GPU working set is bounded by the slab size instead of the volume size
+    (a 512x512x889 CT needs ~13 GB done whole, which no consumer card has).
+    Each slab is uploaded with a 1-voxel halo on each side, because the update
+    of a voxel reads its 6 neighbours; the halo comes from the neighbouring
+    slabs of the CURRENT iteration, and only the slab's core is written back to
+    the next-iteration buffer. Slabbing is therefore exact — bit-for-bit the
+    same result as diffusing the whole volume at once, modulo float addition
+    order — and NOT an approximation with seams at the slab boundaries.
+
+    At the volume's own Z borders the halo is replicated (edge padding), the
+    same convention used on Y and X.
+
     Args:
-        volume: 3D numpy array in HU values (not normalized)
+        volume: 3D numpy array (Z, Y, X) in HU values (not normalized)
         iterations: Number of diffusion iterations
-        K: Edge threshold parameter (in HU units, default 50.0 for CT data)
+        K: Edge threshold parameter, in the units of the data (default 50.0,
+            tuned for CT Hounsfield units — MR needs a much smaller value)
         lambda_param: Time step (stability requires lambda <= 0.25 for 3D)
         diffusion_type: 1 (exponential) or 2 (rational)
-        
+
     Returns:
         Smoothed volume as numpy array in HU values
     """
     if not HAS_CUPY:
         print("⚠  CuPy not available - returning unsmoothed volume")
         return volume
-    
-    print(f"Applying Perona-Malik smoothing on GPU ({iterations} iterations)...")
-    
-    # Transfer to GPU
-    vol_gpu = cp.asarray(volume, dtype=cp.float32)
-    output_gpu = cp.zeros_like(vol_gpu)
-    
+
+    depth, height, width = volume.shape
+    slab_depth = choose_slab_depth(depth, height, width)
+    num_slabs = (depth + slab_depth - 1) // slab_depth
+
+    print(f"Applying Perona-Malik smoothing on GPU ({iterations} iterations, K={K:g})...")
+    print(f"  Slab: {slab_depth} slices x {num_slabs} slabs "
+          f"(~{slab_depth * height * width * 4 * 8 / (1024**3):.2f} GB of VRAM)")
+
+    # Cópia obrigatória: os dois buffers se alternam a cada iteração, então sem
+    # ela o array do CHAMADOR viraria o destino de escrita a partir da 2ª
+    # (ascontiguousarray devolve o mesmo objeto se já for float32 contíguo).
+    current = np.array(volume, dtype=np.float32)
+    nxt = np.empty_like(current)
+
     for iteration in range(iterations):
-        # Compute gradients using neighbor differences
-        # Pad for boundary handling
-        padded = cp.pad(vol_gpu, 1, mode='edge')
-        
-        # Extract neighbors (6-connected)
-        north = padded[:-2, 1:-1, 1:-1]
-        south = padded[2:, 1:-1, 1:-1]
-        west = padded[1:-1, :-2, 1:-1]
-        east = padded[1:-1, 2:, 1:-1]
-        up = padded[1:-1, 1:-1, :-2]
-        down = padded[1:-1, 1:-1, 2:]
-        center = vol_gpu
-        
-        # Compute gradient magnitudes
-        grad_n = cp.abs(north - center)
-        grad_s = cp.abs(south - center)
-        grad_w = cp.abs(west - center)
-        grad_e = cp.abs(east - center)
-        grad_u = cp.abs(up - center)
-        grad_d = cp.abs(down - center)
-        
-        # Compute diffusion coefficients
-        if diffusion_type == 1:
-            # Exponential: favors high-contrast edges
-            c_n = cp.exp(-(grad_n / K) ** 2)
-            c_s = cp.exp(-(grad_s / K) ** 2)
-            c_w = cp.exp(-(grad_w / K) ** 2)
-            c_e = cp.exp(-(grad_e / K) ** 2)
-            c_u = cp.exp(-(grad_u / K) ** 2)
-            c_d = cp.exp(-(grad_d / K) ** 2)
-        else:
-            # Rational: favors wide regions
-            c_n = 1.0 / (1.0 + (grad_n / K) ** 2)
-            c_s = 1.0 / (1.0 + (grad_s / K) ** 2)
-            c_w = 1.0 / (1.0 + (grad_w / K) ** 2)
-            c_e = 1.0 / (1.0 + (grad_e / K) ** 2)
-            c_u = 1.0 / (1.0 + (grad_u / K) ** 2)
-            c_d = 1.0 / (1.0 + (grad_d / K) ** 2)
-        
-        # Compute divergence of diffusion flux
-        divergence = (
-            c_n * (north - center) +
-            c_s * (south - center) +
-            c_w * (west - center) +
-            c_e * (east - center) +
-            c_u * (up - center) +
-            c_d * (down - center)
-        )
-        
-        # Update: I(t+1) = I(t) + lambda * divergence
-        output_gpu[:] = center + lambda_param * divergence
-        
-        # Swap buffers for next iteration
-        vol_gpu, output_gpu = output_gpu, vol_gpu
-        
-        if (iteration + 1) % 1 == 0:
-            print(f"  Iteration {iteration + 1}/{iterations} complete")
-    
-    # Transfer back to CPU
-    result = cp.asnumpy(vol_gpu)
-    
+        for z0 in range(0, depth, slab_depth):
+            z1 = min(z0 + slab_depth, depth)
+
+            # Halo de 1 voxel em Z vindo dos slabs vizinhos; na borda do volume
+            # não há vizinho, então replica (mesma convenção do pad em Y/X).
+            zlo = max(z0 - 1, 0)
+            zhi = min(z1 + 1, depth)
+            block = cp.asarray(current[zlo:zhi])
+
+            pad_z = (1 if z0 == 0 else 0, 1 if z1 == depth else 0)
+            padded = cp.pad(block, (pad_z, (1, 1), (1, 1)), mode='edge')
+            del block
+
+            center = padded[1:-1, 1:-1, 1:-1]
+
+            # Acumula a divergência um vizinho por vez: manter os 6 gradientes e
+            # os 6 coeficientes vivos ao mesmo tempo é o que estourava a VRAM.
+            divergence = cp.zeros_like(center)
+            neighbors = (
+                padded[:-2, 1:-1, 1:-1],   # -Z
+                padded[2:, 1:-1, 1:-1],    # +Z
+                padded[1:-1, :-2, 1:-1],   # -Y
+                padded[1:-1, 2:, 1:-1],    # +Y
+                padded[1:-1, 1:-1, :-2],   # -X
+                padded[1:-1, 1:-1, 2:],    # +X
+            )
+            for neighbor in neighbors:
+                diff = neighbor - center
+                grad = cp.abs(diff)
+                if diffusion_type == 1:
+                    # Exponential: favors high-contrast edges
+                    coeff = cp.exp(-(grad / K) ** 2)
+                else:
+                    # Rational: favors wide regions
+                    coeff = 1.0 / (1.0 + (grad / K) ** 2)
+                divergence += coeff * diff
+                del diff, grad, coeff
+
+            # Update: I(t+1) = I(t) + lambda * divergence
+            result = center + lambda_param * divergence
+            nxt[z0:z1] = cp.asnumpy(result)
+
+            del padded, center, divergence, result, neighbors
+            cp.get_default_memory_pool().free_all_blocks()
+
+        # O próximo passo lê o volume inteiro já atualizado — daí o buffer duplo
+        current, nxt = nxt, current
+        print(f"  Iteration {iteration + 1}/{iterations} complete")
+
     print("✓ Smoothing complete")
-    return result
+    return current
 
 
 def compute_chunk_histograms(volume: np.ndarray, chunk_size: int, num_bins: int,
@@ -458,8 +649,10 @@ def compute_chunk_histograms(volume: np.ndarray, chunk_size: int, num_bins: int,
 
 
 def convert_dicom_series(input_dir: Path, output_dir: Path, apply_smoothing: bool = True,
-                        smoothing_iterations: int = 5, chunk_size: int = 32,
-                        histogram_bins: int = 32, anonymize: bool = True):
+                        smoothing_iterations: int = 5, smoothing_k: float = 50.0,
+                        chunk_size: int = 32, histogram_bins: int = 32,
+                        anonymize: bool = True, series_desc: str = None,
+                        series_uid: str = None):
     """
     Convert DICOM series to float16 raw buffers and metadata JSON.
 
@@ -468,9 +661,13 @@ def convert_dicom_series(input_dir: Path, output_dir: Path, apply_smoothing: boo
         output_dir: Directory to save output files
         apply_smoothing: Whether to apply Perona-Malik smoothing
         smoothing_iterations: Number of smoothing iterations
+        smoothing_k: Perona-Malik edge threshold, in the units of the data
+            (HU for CT, arbitrary scanner units for MR)
         chunk_size: Size of cubic chunks for histogram computation (must be multiple of 16)
         histogram_bins: Number of histogram bins per chunk
         anonymize: Whether to anonymize patient identifiers
+        series_desc: Keep only this SeriesDescription (None = all series)
+        series_uid: Keep only this SeriesInstanceUID (None = all series)
     """
     # Validate chunk size
     if chunk_size % 16 != 0:
@@ -487,8 +684,10 @@ def convert_dicom_series(input_dir: Path, output_dir: Path, apply_smoothing: boo
         print("✗ No valid DICOM files found!")
         return
     
+    dicom_files = filter_series(dicom_files, series_desc, series_uid)
     series_files = select_largest_series(dicom_files)
     sorted_files = sort_dicom_slices(series_files)
+    slice_spacing = derive_slice_spacing(sorted_files)
     
     # First pass - find GLOBAL min/max and load volume
     print("\nLoading volume into memory...")
@@ -525,8 +724,8 @@ def convert_dicom_series(input_dir: Path, output_dir: Path, apply_smoothing: boo
     
     # Apply smoothing if requested
     if apply_smoothing and HAS_CUPY:
-        volume = perona_malik_gpu(volume, iterations=smoothing_iterations, 
-                                  K=50.0, lambda_param=0.1, diffusion_type=2)
+        volume = perona_malik_gpu(volume, iterations=smoothing_iterations,
+                                  K=smoothing_k, lambda_param=0.1, diffusion_type=2)
     elif apply_smoothing and not HAS_CUPY:
         print("⚠  Smoothing requested but CuPy not available - saving unsmoothed volume")
     
@@ -562,7 +761,7 @@ def convert_dicom_series(input_dir: Path, output_dir: Path, apply_smoothing: boo
 
     # Extract and save metadata
     print("\nExtracting metadata...")
-    metadata = extract_metadata(sorted_files, global_min, global_max, anonymize)
+    metadata = extract_metadata(sorted_files, global_min, global_max, slice_spacing, anonymize)
 
     # Add chunk information to metadata
     metadata["chunkSize"] = chunk_size
@@ -587,12 +786,13 @@ def convert_dicom_series(input_dir: Path, output_dir: Path, apply_smoothing: boo
     print(f"   Chunk data: chunk_histograms.bin")
     print(f"   Metadata: metadata.json")
     print(f"   Volume dimensions: {width}x{height}x{num_slices}")
+    print(f"   Slice spacing: {slice_spacing:.4f} mm")
     print(f"   Chunk configuration: {chunk_size}³ chunks, {histogram_bins} bins each")
     print(f"   Total chunks: {metadata['numChunksX']}×{metadata['numChunksY']}×{metadata['numChunksZ']} = {metadata['totalChunks']}")
     print(f"   HU range: [{metadata['huMin']:.1f}, {metadata['huMax']:.1f}]")
     print(f"   Anonymization: {'Enabled' if anonymize else 'Disabled'}")
     if apply_smoothing and HAS_CUPY:
-        print(f"   Smoothing: Applied ({smoothing_iterations} iterations)")
+        print(f"   Smoothing: Applied ({smoothing_iterations} iterations, K={smoothing_k:g})")
     else:
         print(f"   Smoothing: Skipped")
     
@@ -609,6 +809,10 @@ Examples:
   python dicom_converter.py -i ./dicom_data -o ./output --no-anonymize
   python dicom_converter.py -i ./dicom_data -o ./output --chunk-size 64 --no-smooth
   python dicom_converter.py -i ./dicom_data -o ./output --histogram-bins 64
+  python dicom_converter.py -i ./study --list-series
+  python dicom_converter.py -i ./study -o ./output --series "ARTERIAL TOF SJ"
+  python dicom_converter.py -i ./study -o ./output --series-uid 1.2.840.113619.2
+  python dicom_converter.py -i ./mri -o ./output --smooth-k 15   # MR, not HU
         """
     )
     
@@ -622,8 +826,27 @@ Examples:
     parser.add_argument(
         '-o', '--output',
         type=str,
-        required=True,
-        help='Output directory for raw buffers and metadata'
+        help='Output directory for raw buffers and metadata (not needed with --list-series)'
+    )
+
+    parser.add_argument(
+        '--list-series',
+        action='store_true',
+        help='List the series found in the input directory and exit'
+    )
+
+    parser.add_argument(
+        '--series',
+        type=str,
+        default=None,
+        help='Convert only the series with this SeriesDescription (case-insensitive)'
+    )
+
+    parser.add_argument(
+        '--series-uid',
+        type=str,
+        default=None,
+        help='Convert only the series with this SeriesInstanceUID (unambiguous)'
     )
     
     parser.add_argument(
@@ -639,6 +862,14 @@ Examples:
         help='Number of smoothing iterations (default: 5)'
     )
     
+    parser.add_argument(
+        '--smooth-k',
+        type=float,
+        default=50.0,
+        help='Perona-Malik edge threshold, in the units of the data (default: 50, '
+             'tuned for CT Hounsfield units - MR needs a much smaller value)'
+    )
+
     parser.add_argument(
         '--chunk-size',
         type=int,
@@ -660,10 +891,15 @@ Examples:
     )
     
     args = parser.parse_args()
-    
+
     input_dir = Path(args.input)
-    output_dir = Path(args.output)
-    
+
+    if not args.list_series and not args.output:
+        print("✗ Error: -o/--output is required (unless --list-series)")
+        sys.exit(1)
+
+    output_dir = Path(args.output) if args.output else None
+        
     # Validate chunk size
     if args.chunk_size % 16 != 0:
         print(f"✗ Error: Chunk size must be a multiple of 16, got {args.chunk_size}")
@@ -685,7 +921,17 @@ Examples:
     if not input_dir.is_dir():
         print(f"✗ Error: Input path is not a directory: {input_dir}")
         sys.exit(1)
-    
+
+    # Inventory mode: read the headers, print what is in there, and stop.
+    if args.list_series:
+        dicom_files = read_dicom_files(input_dir)
+        if not dicom_files:
+            print("✗ No valid DICOM files found!")
+            sys.exit(1)
+        print("\nSeries found:")
+        print(describe_series(group_series(dicom_files)))
+        sys.exit(0)
+        
     # Warn if not anonymizing
     anonymize = not args.no_anonymize
     if not anonymize:
@@ -703,9 +949,13 @@ Examples:
     print("="*60)
     print(f"Input:  {input_dir}")
     print(f"Output: {output_dir}")
+    if args.series:
+        print(f"Series: '{args.series}'")
+    if args.series_uid:
+        print(f"Series UID: {args.series_uid}")
     print(f"Chunk size: {args.chunk_size}³")
     print(f"Histogram bins: {args.histogram_bins}")
-    print(f"Smoothing: {'Disabled' if args.no_smooth else f'Enabled ({args.iterations} iterations)'}")
+    print(f"Smoothing: {'Disabled' if args.no_smooth else f'Enabled ({args.iterations} iterations, K={args.smooth_k:g})'}")
     print(f"Anonymization: {'Enabled' if anonymize else 'Disabled'}")
     print("="*60 + "\n")
     
@@ -713,9 +963,12 @@ Examples:
         convert_dicom_series(input_dir, output_dir,
                            apply_smoothing=not args.no_smooth,
                            smoothing_iterations=args.iterations,
+                           smoothing_k=args.smooth_k,
                            chunk_size=args.chunk_size,
                            histogram_bins=args.histogram_bins,
-                           anonymize=anonymize)
+                           anonymize=anonymize,
+                           series_desc=args.series,
+                           series_uid=args.series_uid)
     except Exception as e:
         print(f"\n✗ Error during conversion: {e}")
         import traceback

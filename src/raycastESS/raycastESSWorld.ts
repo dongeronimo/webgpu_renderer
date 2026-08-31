@@ -7,7 +7,7 @@ import { Node } from "../node";
 import { Mesh } from "../mesh";
 import { loadGltf } from "../gltfLoader";
 import { loadVolumeTexture } from "../volumeLoader";
-import { dicomTagNumber } from "../volume-types";
+import { dicomTagNumber, sliceSpacingMm } from "../volume-types";
 import { store } from "../redux/store";
 import { setCtfHuRange } from "../redux/actions";
 import { VolumeRaycastESSMaterial } from "./volumeRaycastESSMaterial";
@@ -151,7 +151,7 @@ export class RaycastESSWorld extends World {
         //pro maior eixo = 1 — mesmo cálculo do baseline.
         const physX = metadata.width * dicomTagNumber(metadata.pixelSpacing, 1);
         const physY = metadata.height * dicomTagNumber(metadata.pixelSpacing, 0);
-        const physZ = metadata.numSlices * dicomTagNumber(metadata.sliceThickness);
+        const physZ = metadata.numSlices * sliceSpacingMm(metadata);
         if (Number.isFinite(physX) && Number.isFinite(physY) && Number.isFinite(physZ) && physZ > 0) {
             const longest = Math.max(physX, physY, physZ);
             volumeNode.scale[0] = physX / longest;
