@@ -122,8 +122,6 @@ export class DebugChunksPass {
     //60 floats: view(16)+proj(16)+model(16)+cameraPos(4)+numChunks(4)+chunkCell(4)
     private readonly uniformData = new Float32Array(60);
 
-    //bind group cacheado: só recria se o buffer occupied mudar (não muda depois
-    //da criação — o material o reescreve no lugar).
     private bindGroup: GPUBindGroup | null = null;
     private lastOccupied: GPUBuffer | null = null;
 

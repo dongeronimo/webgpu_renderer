@@ -86,14 +86,6 @@ const DEBUG_PIP_RES_SCALE = 0.4;
 // rasteriza cada contorno numa camada do texture_2d_array e o raymarch descarta
 // os segmentos que caem dentro de qualquer lasso. N lassos, acumulativos.
 //
-// O QUE FALTA:
-//   - undo/redo: a primitiva (LASSO_REMOVED, por id) já existe no redux, falta
-//     o botão na UI e a pilha/cursor;
-//   - modo keep-inside (crop), o inverso do remove-inside de hoje;
-//   - normal analítica da parede do corte: o gradiente ainda lê dados de DENTRO
-//     da região removida, então a parede é sombreada com a normal do tecido;
-//   - skip-map ciente do lasso: hoje o ESS continua correto (só pula o que é
-//     comprovadamente vazio) mas não ganha nada com o corte.
 export class RaycastLassoWorld extends World {
     private mainPass!: MeshRenderPass;
     private finalPass!: FinalRenderPass;
